@@ -4,6 +4,12 @@ const express = require('express');
 const { createLoginLimiter } = require('./middleware/rate-limit');
 const { createAdminAuthRouter } = require('./routes/admin-auth');
 const { ValidationError } = require('./middleware/validation');
+const { HttpError } = require('./utils/http-error');
+const { requireAdmin, requireCsrf } = require('./middleware/auth');
+const { ensureCompetition } = require('./db/competitions');
+const { createBlocksRouter } = require('./routes/admin-blocks');
+const { createJudgesRouter } = require('./routes/admin-judges');
+const { createParticipantsRouter } = require('./routes/admin-participants');
 
 // Заголовки безопасности вручную (без helmet).
 function securityHeaders(req, res, next) {
@@ -39,6 +45,14 @@ function createApp({ db, config }) {
   const loginLimiter = createLoginLimiter(config);
   app.use('/api/v1/admin/auth', createAdminAuthRouter({ db, config, loginLimiter }));
 
+  // Данные конкурса: только с сессией администратора; изменяющие методы — с CSRF.
+  const competitionId = ensureCompetition(db);
+  const adminAuth = requireAdmin(db, config);
+  const guard = [adminAuth, requireCsrf];
+  app.use('/api/v1/admin/blocks', ...guard, createBlocksRouter({ db, competitionId }));
+  app.use('/api/v1/admin/judges', ...guard, createJudgesRouter({ db, competitionId }));
+  app.use('/api/v1/admin/participants', ...guard, createParticipantsRouter({ db, competitionId }));
+
   // Неизвестный API-маршрут — JSON 404.
   app.use('/api', (req, res) => {
     res.status(404).json({ error: 'not_found', message: 'Маршрут не найден' });
@@ -49,6 +63,9 @@ function createApp({ db, config }) {
   app.use((err, req, res, next) => {
     if (err instanceof ValidationError) {
       return res.status(400).json({ error: 'validation', message: err.message });
+    }
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.code, message: err.message });
     }
     if (err && err.type === 'entity.parse.failed') {
       return res.status(400).json({ error: 'bad_json', message: 'Некорректный JSON' });
