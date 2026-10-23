@@ -16,8 +16,11 @@ function main() {
   const db = openDatabase(config.databasePath);
   const app = createApp({ db, config });
 
-  const server = app.listen(config.port, () => {
-    console.log(`[server] слушает порт ${config.port}`);
+  const server = app.listen(config.port, config.host, () => {
+    console.log(`[server] слушает ${config.host}:${config.port}`);
+    if (!['127.0.0.1', '::1', 'localhost'].includes(config.host)) {
+      console.warn('[server] HOST не loopback: убедитесь, что порт закрыт файрволом и доступен только через nginx');
+    }
   });
 
   const shutdown = () => {

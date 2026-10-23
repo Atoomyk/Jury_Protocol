@@ -24,6 +24,17 @@ function readInt(env, name, fallback, min, max) {
   return n;
 }
 
+// Адрес прослушивания. По умолчанию только loopback: за nginx наружу не открываем.
+function readHost(env, name, fallback) {
+  const raw = env[name];
+  if (raw === undefined || String(raw).trim() === '') return fallback;
+  const host = String(raw).trim();
+  if (!/^[A-Za-z0-9.:\-]{1,255}$/.test(host)) {
+    throw new Error(`${name}: недопустимое значение`);
+  }
+  return host;
+}
+
 // Значения не печатаются в ошибках: только имя переменной.
 function loadConfig(env = process.env) {
   const publicOriginRaw = readRequired(env, 'PUBLIC_ORIGIN');
@@ -49,6 +60,7 @@ function loadConfig(env = process.env) {
   return Object.freeze({
     nodeEnv: (env.NODE_ENV || 'development').trim(),
     port: readInt(env, 'PORT', 3000, 1, 65535),
+    host: readHost(env, 'HOST', '127.0.0.1'),
     publicOrigin,
     databasePath,
     invitationExpiresAt: invitationExpiresAt.toISOString(),
