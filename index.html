@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Лазурный берег · Жюри</title>
+  <link rel="stylesheet" href="style.css">
+  <style id="pageStyle"></style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Лазурный берег</div>
+    <div id="whoami" class="whoami"></div>
+    <button id="btnLogout" class="btn btn-ghost btn-sm hidden">Выйти</button>
+  </header>
+
+  <main>
+    <!-- ===== ЭКРАН ВХОДА ===== -->
+    <section id="screen-login" class="screen">
+      <img src="assets/noroot.png" alt="IvFest" class="logo">
+
+      <div id="cardAdmin" class="card">
+        <button id="btnAdminToggle" class="btn btn-primary btn-block">Администратор</button>
+        <div id="adminPanel" class="hidden">
+          <label class="label" for="adminPin">Пароль администратора</label>
+          <input id="adminPin" class="input" type="password" placeholder="Пароль администратора" autocomplete="off">
+          <button id="btnAdmin" class="btn btn-primary btn-block">Войти</button>
+          <p id="pinError" class="error hidden">Неверный пароль</p>
+          <button id="btnAdminBack" class="btn btn-ghost btn-block">Назад</button>
+        </div>
+      </div>
+
+      <div id="cardJudge" class="card">
+        <button id="btnJudgeToggle" class="btn btn-primary btn-block">Жюри</button>
+        <div id="judgePanel" class="hidden">
+          <label class="label" for="judgeGenre">Блок (жанр)</label>
+          <select id="judgeGenre" class="input"></select>
+          <label class="label" for="judgePass">Пароль жюри</label>
+          <input id="judgePass" class="input" type="password" autocomplete="off">
+          <label class="label" for="judgeSelect">Член жюри</label>
+          <select id="judgeSelect" class="input"></select>
+          <p id="judgeError" class="error hidden">Неверный пароль</p>
+          <button id="btnJudge" class="btn btn-accent btn-block">Войти</button>
+          <button id="btnJudgeBack" class="btn btn-ghost btn-block">Назад</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ЭКРАН АДМИНИСТРАТОРА ===== -->
+    <section id="screen-admin" class="screen hidden">
+      <nav id="adminTabs" class="tabs no-print">
+        <button class="btn btn-ghost" data-tab="participants">Участники</button>
+        <button class="btn btn-ghost" data-tab="results">Результаты</button>
+        <button class="btn btn-ghost" data-tab="print">Протоколы</button>
+        <button class="btn btn-ghost" data-tab="settings">Настройки</button>
+      </nav>
+
+      <!-- Участники -->
+      <div id="tab-participants" class="screen">
+        <div class="card">
+          <h2>Новый участник</h2>
+          <form id="formParticipant" class="grid-form">
+            <label>Номер участника (порядок показа)
+              <input class="input" name="number" type="number" min="1" step="1" required>
+            </label>
+            <label>Жанр (блок)
+              <select class="input" name="genre" id="genreSelect" required></select>
+            </label>
+            <label>Коллектив или ФИО солиста
+              <input class="input" name="name" type="text" required>
+            </label>
+            <label>Название номера
+              <input class="input" name="act" type="text" required>
+            </label>
+            <label>Количество участников (только для коллектива/дуэта; для солиста пусто)
+              <input class="input" name="groupSize" type="number" min="1" step="1">
+            </label>
+            <label>Номинация
+              <input class="input" name="nomination" type="text">
+            </label>
+            <label>Возрастная категория
+              <input class="input" name="category" type="text" placeholder="например: 12–14 лет">
+            </label>
+            <label>Город
+              <input class="input" name="city" type="text">
+            </label>
+            <label>Фамилия и имя руководителя (необязательно)
+              <input class="input" name="leader" type="text">
+            </label>
+            <button class="btn btn-primary btn-block" type="submit">Добавить участника</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Список участников</h2>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>№</th><th>Коллектив / номер</th><th>Жанр</th>
+                  <th>Оценка</th><th>Управление</th>
+                </tr>
+              </thead>
+              <tbody id="participantsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Результаты -->
+      <div id="tab-results" class="screen hidden">
+        <div class="card">
+          <h2>Результаты по блокам</h2>
+          <div id="resultsBox"></div>
+          <div class="toolbar">
+            <button id="btnExportCsv" class="btn btn-primary">Экспорт в CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Протоколы -->
+      <div id="tab-print" class="screen hidden">
+        <div class="card no-print">
+          <h2>Протокол блока</h2>
+          <label class="label" for="printGenre">Блок (жанр)</label>
+          <select id="printGenre" class="input"></select>
+          <label class="label" for="printBlockName">Название блока</label>
+          <input id="printBlockName" class="input" type="text">
+          <label class="label" for="printMode">Что печатать</label>
+          <select id="printMode" class="input"></select>
+          <button id="btnPrint" class="btn btn-primary btn-block">Сформировать протокол блока</button>
+        </div>
+        <div class="card no-print">
+          <h2>Итоговый протокол конкурса</h2>
+          <p class="sub">Лист на каждый блок: места, средний балл, Гран-при.</p>
+          <button id="btnPrintAll" class="btn btn-primary btn-block">Сформировать итоговый протокол</button>
+        </div>
+      </div>
+
+      <!-- Настройки -->
+      <div id="tab-settings" class="screen hidden">
+        <div class="card">
+          <h2>Тема оформления</h2>
+          <div class="theme-switch">
+            <button type="button" class="btn btn-ghost theme-btn" data-theme-set="dark">🌙 Тёмная</button>
+            <button type="button" class="btn btn-ghost theme-btn" data-theme-set="light">☀️ Светлая</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Жюри</h2>
+          <form id="formJudge" class="judge-add">
+            <input id="judgeName" class="input" type="text" placeholder="ФИО члена жюри" required>
+            <button class="btn btn-primary" type="submit">Добавить</button>
+          </form>
+          <div id="judgesList"></div>
+        </div>
+
+        <div class="card">
+          <h2>Назначение членов жюри по блокам</h2>
+          <p class="sub">Один член жюри может быть назначен в несколько блоков. В каждом блоке от 2 до 4 членов жюри.</p>
+          <div id="assignBox"></div>
+        </div>
+
+        <div class="card">
+          <h2>Пароли</h2>
+          <p id="judgePassStatus" class="sub"></p>
+          <label class="label" for="newJudgePass">Пароль жюри (ровно 5 символов)</label>
+          <input id="newJudgePass" class="input" type="password" autocomplete="new-password">
+          <div class="toolbar">
+            <button id="btnSetJudgePass" class="btn btn-primary">Установить / изменить пароль жюри</button>
+            <button id="btnDelJudgePass" class="btn btn-ghost">Удалить пароль жюри</button>
+          </div>
+
+          <label class="label" for="newAdminPass">Новый пароль администратора (от 5 до 10 символов)</label>
+          <input id="newAdminPass" class="input" type="password" autocomplete="new-password">
+          <div class="toolbar">
+            <button id="btnSetAdminPass" class="btn btn-primary">Сменить пароль администратора</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ЭКРАН СУДЬИ ===== -->
+    <section id="screen-judge" class="screen hidden">
+      <div id="judgeListCard" class="card">
+        <h2 id="judgeListTitle"></h2>
+        <div id="judgeListBox"></div>
+
+        <div class="theme-block">
+          <h3>Тема оформления</h3>
+          <div class="theme-switch">
+            <button type="button" class="btn btn-ghost theme-btn" data-theme-set="dark">🌙 Тёмная</button>
+            <button type="button" class="btn btn-ghost theme-btn" data-theme-set="light">☀️ Светлая</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="judgeCard" class="screen hidden">
+        <div class="card judge-head">
+          <div class="num" id="jNum"></div>
+          <div class="judge-info">
+            <div class="name" id="jName"></div>
+            <div class="act" id="jAct"></div>
+            <div class="meta" id="jMeta"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div id="jCriteria"></div>
+          <div class="total">Итого: <span id="jTotal">0</span> / <span id="jMax">0</span></div>
+        </div>
+
+        <div class="card">
+          <label class="label" for="jComment">Комментарий члена жюри</label>
+          <textarea id="jComment" class="input" rows="3" placeholder="Необязательно"></textarea>
+        </div>
+
+        <button id="btnSave" class="btn btn-accent btn-block btn-xl">Сохранить оценку</button>
+        <p id="jStatus" class="status"></p>
+        <button id="btnBack" class="btn btn-ghost btn-block">Назад к списку участников</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Контейнер печатного протокола: виден только при печати -->
+  <div id="printRoot"></div>
+
+  <script src="shared/scoring.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "lazurny-jury-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Сервер для жюри конкурса «Лазурный берег»: REST API, SQLite, синхронизация оценок",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "init-admin": "node scripts/init-admin.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "argon2": "^0.41.0",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0",
+    "express-rate-limit": "^7.4.0"
+  }
+}

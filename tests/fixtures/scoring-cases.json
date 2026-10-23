@@ -1,0 +1,151 @@
+{
+  "_meta": {
+    "source": "app.js: judgeScore, blockResults, round2, fmt2, grandPrixCount, prizeFor, getCriteria",
+    "stage": 0,
+    "note": "Значения получены вручную по формулам текущего app.js. Сравнивать числа с допуском 1e-9. Строки — точно."
+  },
+
+  "round2": [
+    { "in": 8.125, "expected": 8.13 },
+    { "in": 8.333333, "expected": 8.33 },
+    { "in": 8.25, "expected": 8.25 },
+    { "in": 10, "expected": 10 }
+  ],
+
+  "fmt2": [
+    { "in": 7, "expected": "7,00" },
+    { "in": 8.33, "expected": "8,33" },
+    { "in": null, "expected": "—" }
+  ],
+
+  "grandPrixCount": [
+    { "n": 0, "expected": 2 },
+    { "n": 1, "expected": 2 },
+    { "n": 19, "expected": 2 },
+    { "n": 20, "expected": 3 },
+    { "n": 35, "expected": 3 },
+    { "n": 36, "expected": 4 },
+    { "n": 45, "expected": 4 },
+    { "n": 46, "expected": 5 },
+    { "n": 55, "expected": 5 },
+    { "n": 56, "expected": 6 },
+    { "n": 65, "expected": 6 },
+    { "n": 66, "expected": 7 },
+    { "n": 75, "expected": 7 },
+    { "n": 76, "expected": 8 },
+    { "n": 85, "expected": 8 }
+  ],
+
+  "prizeFor": [
+    { "avg": null, "expected": "" },
+    { "avg": 10, "expected": "Гран-при" },
+    { "avg": 9.99, "expected": "1 место" },
+    { "avg": 9, "expected": "1 место" },
+    { "avg": 8.99, "expected": "2 место" },
+    { "avg": 8, "expected": "2 место" },
+    { "avg": 7.99, "expected": "3 место" },
+    { "avg": 7, "expected": "3 место" },
+    { "avg": 6.99, "expected": "" }
+  ],
+
+  "criteriaLabels": [
+    { "genre": "Хореография", "groupSize": null, "key": "impression", "expected": "Общее художественное впечатление (для солистов)" },
+    { "genre": "Хореография", "groupSize": 3, "key": "impression", "expected": "Синхронность (для дуэтов и коллективов)" },
+    { "genre": "Хореография", "groupSize": 3, "key": "composition", "expected": "Композиционная выстроенность" }
+  ],
+
+  "judgeScore": [
+    {
+      "name": "Вокал, солист, пропущен критерий delivery (считается 0)",
+      "genre": "Вокал",
+      "groupSize": null,
+      "criteria": { "impression": 9, "stageImage": 8, "repertoire": 7, "school": 9 },
+      "expected": 6.6
+    },
+    {
+      "name": "Театр, коллектив, все 10",
+      "genre": "Театр",
+      "groupSize": 4,
+      "criteria": { "theme": 10, "impression": 10, "repertoireComplexity": 10, "artistry": 10, "repertoire": 10 },
+      "expected": 10
+    }
+  ],
+
+  "blockResults": [
+    {
+      "name": "Вокал: Гран-при, солист с полными оценками, коллектив с одним судьёй, участник без оценок",
+      "genre": "Вокал",
+      "judges": [
+        { "id": "j1", "name": "Судья 1" },
+        { "id": "j2", "name": "Судья 2" }
+      ],
+      "participants": [
+        { "id": "p1", "number": 1, "genre": "Вокал", "groupSize": null },
+        { "id": "p2", "number": 2, "genre": "Вокал", "groupSize": 3 },
+        { "id": "p3", "number": 3, "genre": "Вокал", "groupSize": null },
+        { "id": "p4", "number": 4, "genre": "Вокал", "groupSize": null }
+      ],
+      "scores": {
+        "p1": {
+          "j1": { "criteria": { "impression": 10, "stageImage": 10, "repertoire": 10, "school": 10, "delivery": 10 } },
+          "j2": { "criteria": { "impression": 10, "stageImage": 10, "repertoire": 10, "school": 10, "delivery": 10 } }
+        },
+        "p2": {
+          "j1": { "criteria": { "impression": 7, "stageImage": 7, "repertoire": 7, "school": 7, "delivery": 7 } }
+        },
+        "p3": {
+          "j1": { "criteria": { "impression": 9, "stageImage": 8, "repertoire": 7, "school": 9, "delivery": 8 } },
+          "j2": { "criteria": { "impression": 10, "stageImage": 10, "repertoire": 9, "school": 10, "delivery": 10 } }
+        }
+      },
+      "expected": {
+        "n": 4,
+        "gpTable": 2,
+        "gpActual": 1,
+        "order": [1, 3, 2, 4],
+        "rows": [
+          { "number": 1, "perJudge": [10, 10], "avg": 10, "count": 2, "prize": "Гран-при", "fmtPerJudge": ["10,00", "10,00"], "fmtAvg": "10,00" },
+          { "number": 3, "perJudge": [8.2, 9.8], "avg": 9, "count": 2, "prize": "1 место", "fmtPerJudge": ["8,20", "9,80"], "fmtAvg": "9,00" },
+          { "number": 2, "perJudge": [7, null], "avg": 7, "count": 1, "prize": "3 место", "fmtPerJudge": ["7,00", "—"], "fmtAvg": "7,00" },
+          { "number": 4, "perJudge": [null, null], "avg": null, "count": 0, "prize": "", "fmtPerJudge": ["—", "—"], "fmtAvg": "—" }
+        ]
+      }
+    },
+    {
+      "name": "Хореография: округление среднего до сотых, пропуск судьи, участник без оценок",
+      "genre": "Хореография",
+      "judges": [
+        { "id": "j1", "name": "Судья 1" },
+        { "id": "j2", "name": "Судья 2" },
+        { "id": "j3", "name": "Судья 3" }
+      ],
+      "participants": [
+        { "id": "q1", "number": 10, "genre": "Хореография", "groupSize": null },
+        { "id": "q2", "number": 11, "genre": "Хореография", "groupSize": null },
+        { "id": "q3", "number": 5, "genre": "Хореография", "groupSize": null }
+      ],
+      "scores": {
+        "q1": {
+          "j1": { "criteria": { "impression": 8, "composition": 8, "stageImage": 8, "school": 9, "costumes": 8 } },
+          "j2": { "criteria": { "impression": 8, "composition": 8, "stageImage": 9, "school": 9, "costumes": 8 } },
+          "j3": { "criteria": { "impression": 9, "composition": 8, "stageImage": 8, "school": 9, "costumes": 8 } }
+        },
+        "q2": {
+          "j1": { "criteria": { "impression": 8, "composition": 8, "stageImage": 8, "school": 9, "costumes": 8 } },
+          "j2": { "criteria": { "impression": 8, "composition": 8, "stageImage": 8, "school": 9, "costumes": 8 } }
+        }
+      },
+      "expected": {
+        "n": 3,
+        "gpTable": 2,
+        "gpActual": 0,
+        "order": [10, 11, 5],
+        "rows": [
+          { "number": 10, "perJudge": [8.2, 8.4, 8.4], "avg": 8.33, "count": 3, "prize": "2 место", "fmtPerJudge": ["8,20", "8,40", "8,40"], "fmtAvg": "8,33" },
+          { "number": 11, "perJudge": [8.2, 8.2, null], "avg": 8.2, "count": 2, "prize": "2 место", "fmtPerJudge": ["8,20", "8,20", "—"], "fmtAvg": "8,20" },
+          { "number": 5, "perJudge": [null, null, null], "avg": null, "count": 0, "prize": "", "fmtPerJudge": ["—", "—", "—"], "fmtAvg": "—" }
+        ]
+      }
+    }
+  ]
+}

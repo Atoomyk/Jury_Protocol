@@ -1,0 +1,249 @@
+/* ==================== ТЕМЫ ==================== */
+/* Тёмная тема — по умолчанию. Светлая включается атрибутом data-theme="light" на <html>. */
+:root {
+  --navy: #14213d;           /* шапка, основные кнопки */
+  --navy-2: #2a4a7a;         /* рамки второстепенных кнопок */
+  --accent: #3b6ea5;
+  --bg: #0f1520;             /* фон под подложкой */
+  --card: #1b2535;
+  --text: #e6ebf2;
+  --muted: #9aa7b8;
+  --heading: #8fb8ea;        /* заголовки */
+  --border: #3a4759;
+  --line: #2c3a50;           /* разделители в таблицах и списках */
+  --input-bg: #111a28;
+  --th-bg: #223048;
+  --ghost-bg: #1b2535;
+  --btn-text: #e6ebf2;       /* текст вторичных кнопок */
+  --score-border: #4a5a70;
+  --current-bg: #173d2a;
+  --ok: #5fd08c;
+  --warn: #f0b04a;
+  --red: #ff7b6b;
+  --shadow: 0 2px 8px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --navy: #1d3557;
+  --navy-2: #274872;
+  --accent: #3b6ea5;
+  --bg: #eef1f5;
+  --card: #ffffff;
+  --text: #222b36;
+  --muted: #6b7785;
+  --heading: #1d3557;
+  --border: #c9d2dd;
+  --line: #e3e8ef;
+  --input-bg: #ffffff;
+  --th-bg: #f3f6fa;
+  --ghost-bg: #ffffff;
+  --btn-text: #1d3557;
+  --score-border: #b8c4d2;
+  --current-bg: #e3f5ea;
+  --ok: #2e9e5b;
+  --warn: #b9770e;
+  --red: #c0392b;
+  --shadow: 0 2px 6px rgba(0, 0, 0, .06);
+  color-scheme: light;
+}
+
+/* ==================== БАЗА ==================== */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+html { background: var(--bg); }
+
+body {
+  position: relative;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  background: transparent;
+  color: var(--text);
+  font-size: 17px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Подложка: фото из assets/background.jpg, прозрачность 50%, поверх фона темы */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: url("assets/background.jpg") center / cover no-repeat;
+  opacity: .5;
+  pointer-events: none;
+}
+
+.hidden { display: none !important; }
+.center { text-align: center; }
+
+/* ---------- Шапка ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px;
+  background: var(--navy); color: #fff;
+}
+.brand { font-weight: 700; font-size: 20px; flex: 1; }
+.whoami { font-size: 15px; opacity: .9; }
+.topbar .btn-ghost { background: transparent; color: #fff; border-color: #fff; margin-top: 0; }
+
+/* ---------- Каркас ---------- */
+main {
+  max-width: 1100px; margin: 0 auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.screen { display: flex; flex-direction: column; gap: 16px; }
+.title { margin: 8px 0; font-size: 28px; color: var(--heading); text-align: center; }
+.logo { display: block; margin: 8px auto 16px; width: 160px; height: auto; }
+
+.card {
+  background: var(--card); border-radius: 16px; padding: 16px;
+  box-shadow: var(--shadow);
+}
+.card h2 { margin: 0 0 12px; font-size: 20px; color: var(--heading); }
+.sub { font-size: 14px; color: var(--muted); }
+.error { color: var(--red); font-weight: 600; }
+.warn { color: var(--warn); font-weight: 600; }
+.ok { color: var(--ok); font-weight: 600; }
+.empty { text-align: center; color: var(--muted); padding: 20px; }
+.status { text-align: center; font-weight: 600; color: var(--muted); }
+.block-h { margin: 16px 0 4px; font-size: 19px; color: var(--heading); }
+
+/* ---------- Кнопки (крупные, под палец) ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 56px; padding: 0 20px; margin-top: 10px;
+  border: 2px solid transparent; border-radius: 14px;
+  font-family: inherit; font-size: 18px; font-weight: 600;
+  cursor: pointer;
+}
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--navy); color: #fff; }
+.btn-accent  { background: var(--accent); color: #fff; }
+.btn-ghost   { background: var(--ghost-bg); color: var(--btn-text); border-color: var(--navy-2); }
+.btn-block   { width: 100%; }
+.btn-sm      { min-height: 44px; font-size: 15px; padding: 0 14px; }
+.btn-xl      { min-height: 68px; font-size: 22px; }
+.btn-tab-on  { background: var(--navy); color: #fff; border-color: var(--navy); }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; }
+.toolbar .btn { flex: 1 1 220px; margin-top: 10px; }
+
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs .btn { flex: 1 1 150px; margin-top: 0; }
+
+/* ---------- Переключатель темы (луна / солнце) ---------- */
+.theme-block { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.theme-block h2, .theme-block h3 { margin: 0 0 8px; font-size: 18px; color: var(--heading); }
+.theme-switch { display: flex; gap: 10px; flex-wrap: wrap; }
+.theme-switch .btn { flex: 1 1 160px; margin-top: 0; }
+.theme-btn.btn-tab-on { box-shadow: 0 0 0 3px var(--accent); }
+
+/* ---------- Формы ---------- */
+.input {
+  width: 100%; min-height: 52px; padding: 12px 14px;
+  font-family: inherit; font-size: 18px; color: var(--text);
+  background: var(--input-bg); border: 2px solid var(--border); border-radius: 12px;
+}
+textarea.input { min-height: 90px; resize: vertical; }
+.label { display: block; margin: 8px 0 6px; font-weight: 600; color: var(--muted); }
+.grid-form { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.grid-form label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; color: var(--muted); }
+.judge-add { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+.judge-add .input { flex: 1 1 240px; }
+.judge-add .btn { margin-top: 0; }
+
+@media (min-width: 700px) {
+  .grid-form { grid-template-columns: 1fr 1fr; }
+  .grid-form .btn { grid-column: 1 / -1; }
+}
+
+/* ---------- Таблицы ---------- */
+.table-wrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: 16px; }
+.table th, .table td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.table th { background: var(--th-bg); color: var(--heading); font-size: 14px; text-transform: uppercase; }
+.num-cell { font-size: 24px; font-weight: 700; color: var(--heading); }
+.avg { font-size: 22px; font-weight: 700; color: var(--heading); }
+.actions { white-space: nowrap; }
+.actions .btn { margin-top: 0; margin-bottom: 4px; display: flex; width: 100%; }
+
+/* ---------- Настройки: судьи, назначения ---------- */
+.judge-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.judge-row .btn { margin-top: 0; }
+.assign-block { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.assign-block h3 { margin: 0 0 6px; color: var(--heading); font-size: 18px; }
+.check-list { display: grid; grid-template-columns: 1fr; gap: 4px 12px; }
+@media (min-width: 600px) { .check-list { grid-template-columns: 1fr 1fr 1fr; } }
+.check { display: flex; align-items: center; gap: 10px; font-size: 17px; min-height: 40px; }
+.check input { width: 22px; height: 22px; flex: 0 0 22px; }
+
+/* ---------- Список участников для судьи ---------- */
+.list-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 0; border-bottom: 1px solid var(--line);
+}
+.list-row .info { flex: 1; min-width: 200px; }
+.list-row .num-cell { min-width: 56px; }
+.list-row .btn { margin-top: 0; }
+
+/* ---------- Карточка судьи ---------- */
+.judge-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.num { font-size: 56px; font-weight: 800; color: var(--heading); line-height: 1; min-width: 80px; }
+.judge-info { flex: 1; min-width: 200px; }
+.name { font-size: 24px; font-weight: 700; color: var(--heading); }
+.act { font-size: 20px; }
+.meta { color: var(--muted); margin-top: 4px; }
+
+.crit { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.crit:last-child { border-bottom: 0; }
+.crit-label { font-weight: 600; font-size: 18px; margin-bottom: 8px; }
+.scale { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+@media (min-width: 600px) { .scale { grid-template-columns: repeat(10, 1fr); } }
+
+.score-btn {
+  min-height: 56px; border: 2px solid var(--score-border); border-radius: 12px;
+  background: var(--input-bg); color: var(--text);
+  font-family: inherit; font-size: 24px; font-weight: 700; cursor: pointer;
+}
+.score-btn.active { background: var(--navy); border-color: var(--navy); color: #fff; }
+
+.total { font-size: 32px; font-weight: 800; text-align: center; color: var(--heading); margin-top: 12px; }
+.total span { font-size: 26px; }
+
+/* ---------- Печатный протокол (всегда чёрно-белый, без подложки) ---------- */
+#printRoot { display: none; }
+
+@media print {
+  body::before { display: none !important; }
+  .topbar, main, .no-print { display: none !important; }
+
+  #printRoot { display: block !important; }
+  html, body { background: #fff !important; color: #000 !important; font-size: 11pt; }
+
+  .sheet { color: #000; background: #fff; }
+  .sheet + .sheet { page-break-before: always; break-before: page; }
+  .p-contest { text-align: center; font-weight: 700; font-size: 12pt; margin-bottom: 6pt; }
+  .p-judge { font-size: 11pt; margin-bottom: 6pt; }
+  .p-block { text-align: center; font-size: 13pt; font-weight: 700; margin: 8pt 0 4pt; }
+  .p-mode { text-align: center; font-size: 9pt; margin-bottom: 6pt; }
+  .p-line { display: inline-block; min-width: 120pt; border-bottom: 1px solid #000; }
+
+  .p-table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+  .p-table th, .p-table td { border: 1px solid #000; padding: 3pt 4pt; vertical-align: middle; }
+  .p-table th { font-weight: 700; text-align: center; background: #fff; }
+  .p-table td.c-name { text-align: left; }
+  .p-table .c-num { width: 6%; text-align: center; font-size: 12pt; font-weight: 700; }
+  .p-table .c-name { width: 26%; }
+  .p-table .c-val, .p-table .c-sum { text-align: center; font-size: 12pt; font-weight: 700; }
+  .p-table .c-note { width: 10%; }
+  .p-table thead { display: table-header-group; }
+  .p-table tr { page-break-inside: avoid; break-inside: avoid; }
+
+  .p-sign { margin-top: 14pt; page-break-inside: avoid; break-inside: avoid; }
+  .p-sign p { margin: 8pt 0; }
+}

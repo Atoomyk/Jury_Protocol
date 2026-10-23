@@ -1,0 +1,9 @@
+{
+  "name": "lazurny-jury",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Жюри конкурса «Лазурный берег»: корень проекта (общие тесты). Сервер — в server/package.json.",
+  "scripts": {
+    "test": "node --test tests/scoring.test.js"
+  }
+}

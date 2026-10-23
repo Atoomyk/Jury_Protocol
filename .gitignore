@@ -1,0 +1,27 @@
+# Секреты и локальная конфигурация сервера
+.env
+.env.*
+!.env.example
+
+# База данных и её временные файлы
+server/data/*.db
+server/data/*.db-*
+server/data/backups/
+
+# Зависимости и сборка
+node_modules/
+.venv/
+dist/
+build/
+__pycache__/
+
+# Логи и системные файлы
+*.log
+.DS_Store
+Thumbs.db
+
+# Локальный шаблон конфигурации сервера не публикуется
+server/.env.example
+
+
+README.md
