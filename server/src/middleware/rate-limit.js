@@ -15,4 +15,17 @@ function createLoginLimiter(config) {
   });
 }
 
-module.exports = { createLoginLimiter };
+// Лимит попыток подключения судьи по одноразовому токену.
+// 256-битный токен перебрать нереально, но лимит защищает от автоматического мусора.
+function createJudgeAuthLimiter(config) {
+  return rateLimit({
+    windowMs: config.loginWindowMinutes * 60 * 1000,
+    limit: config.loginMaxAttempts,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    message: { error: 'too_many_attempts', message: 'Слишком много попыток подключения. Попробуйте позже.' },
+  });
+}
+
+module.exports = { createLoginLimiter, createJudgeAuthLimiter };

@@ -20,8 +20,3 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Локальный шаблон конфигурации сервера не публикуется
-server/.env.example
-
-
-README.md

@@ -1,0 +1,20 @@
+{
+  "name": "Жюри конкурса «Лазурный берег»",
+  "short_name": "Жюри Лазурный",
+  "description": "Оценки жюри, протоколы и синхронизация конкурса «Лазурный берег»",
+  "lang": "ru",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1520",
+  "theme_color": "#14213d",
+  "icons": [
+    {
+      "src": "assets/noroot.png",
+      "sizes": "300x300",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

@@ -247,3 +247,13 @@ textarea.input { min-height: 90px; resize: vertical; }
   .p-sign { margin-top: 14pt; page-break-inside: avoid; break-inside: avoid; }
   .p-sign p { margin: 8pt 0; }
 }
+
+/* ---------- QR-приглашения ---------- */
+.qr-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 10px; }
+.qr-svg { margin: 10px 0; }
+.qr-svg svg { width: 60mm; height: 60mm; max-width: 100%; }
+.qr-fallback { word-break: break-all; }
+
+@media print {
+  .qr-svg svg { width: 55mm; height: 55mm; }
+}

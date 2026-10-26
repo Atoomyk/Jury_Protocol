@@ -15,8 +15,13 @@ function readParticipantFields(body) {
   const number = readInt(body, 'number', { min: 1, max: NUMBER_MAX });
   const name = readString(body, 'name', { max: 200 });
   const title = readString(body, 'title', { max: 200, required: false });
-  const groupSize = readInt(body, 'groupSize', { min: 1, max: GROUP_SIZE_MAX });
-  return { number, name, title, groupSize };
+  // Для солиста поле можно не передавать: readInt вернёт null.
+  const groupSize = readInt(body, 'groupSize', { min: 1, max: GROUP_SIZE_MAX, required: false });
+  const nomination = readString(body, 'nomination', { max: 200, required: false });
+  const category = readString(body, 'category', { max: 100, required: false });
+  const city = readString(body, 'city', { max: 100, required: false });
+  const leader = readString(body, 'leader', { max: 200, required: false });
+  return { number, name, title, groupSize, nomination, category, city, leader };
 }
 
 function createParticipantsRouter({ db, competitionId }) {
@@ -34,7 +39,12 @@ function createParticipantsRouter({ db, competitionId }) {
     }
   }
 
-  // POST /api/v1/admin/participants { blockId, number, name, title?, groupSize }
+  // GET /api/v1/admin/participants — все неудалённые участники конкурса.
+  router.get('/', (req, res) => {
+    res.json({ participants: participants.listCompetitionParticipants(db, competitionId) });
+  });
+
+  // POST /api/v1/admin/participants { blockId, number, name, title?, groupSize, ... }
   router.post('/', (req, res) => {
     const body = requireObjectBody(req);
     const blockId = readInt(body, 'blockId', { min: 1, max: Number.MAX_SAFE_INTEGER });
@@ -51,7 +61,7 @@ function createParticipantsRouter({ db, competitionId }) {
     res.status(201).json({ participant: requireActive(id) });
   });
 
-  // PATCH /api/v1/admin/participants/:id { number, name, title?, groupSize }
+  // PATCH /api/v1/admin/participants/:id { number, name, title?, groupSize, ... }
   // Блок участника не меняется (перенос между блоками — отдельная операция).
   router.patch('/:id', (req, res) => {
     const id = parseId(req.params.id);

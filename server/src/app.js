@@ -1,15 +1,21 @@
 'use strict';
 
+const path = require('path');
 const express = require('express');
-const { createLoginLimiter } = require('./middleware/rate-limit');
+const { createLoginLimiter, createJudgeAuthLimiter } = require('./middleware/rate-limit');
 const { createAdminAuthRouter } = require('./routes/admin-auth');
 const { ValidationError } = require('./middleware/validation');
 const { HttpError } = require('./utils/http-error');
 const { requireAdmin, requireCsrf } = require('./middleware/auth');
+const { requireJudge } = require('./middleware/judge-auth');
 const { ensureCompetition } = require('./db/competitions');
 const { createBlocksRouter } = require('./routes/admin-blocks');
 const { createJudgesRouter } = require('./routes/admin-judges');
 const { createParticipantsRouter } = require('./routes/admin-participants');
+const { createInvitationsRouter } = require('./routes/admin-invitations');
+const { createJudgeAuthRouter } = require('./routes/judge-auth');
+const { createJudgeSyncRouter } = require('./routes/judge-sync');
+const { createAdminStateRouter } = require('./routes/admin-state');
 
 // Заголовки безопасности вручную (без helmet).
 function securityHeaders(req, res, next) {
@@ -52,6 +58,33 @@ function createApp({ db, config }) {
   app.use('/api/v1/admin/blocks', ...guard, createBlocksRouter({ db, competitionId }));
   app.use('/api/v1/admin/judges', ...guard, createJudgesRouter({ db, competitionId }));
   app.use('/api/v1/admin/participants', ...guard, createParticipantsRouter({ db, competitionId }));
+  app.use('/api/v1/admin/invitations', ...guard, createInvitationsRouter({ db, config, competitionId }));
+  app.use('/api/v1/admin/state', ...guard, createAdminStateRouter({ db, competitionId }));
+
+  // Клиент судьи: вход по одноразовому токену и синхронизация по токену устройства.
+  app.use('/api/v1/judge/auth', createJudgeAuthLimiter(config), createJudgeAuthRouter({ db, competitionId }));
+  app.use('/api/v1/judge', requireJudge(db), createJudgeSyncRouter({ db, competitionId }));
+
+  // Клиентские файлы раздаёт сам Express: cookie и CSRF требуют одного origin.
+  // Наружу попадают только файлы оболочки; каталог server/ и база данных закрыты.
+  const clientRoot = path.join(__dirname, '..', '..');
+  const clientFiles = {
+    '/index.html': 'text/html; charset=utf-8',
+    '/app.js': 'text/javascript; charset=utf-8',
+    '/style.css': 'text/css; charset=utf-8',
+    '/manifest.json': 'application/manifest+json; charset=utf-8',
+    '/service-worker.js': 'text/javascript; charset=utf-8',
+  };
+  app.get('/', (req, res) => res.sendFile(path.join(clientRoot, 'index.html')));
+  for (const [route, type] of Object.entries(clientFiles)) {
+    app.get(route, (req, res) => {
+      res.setHeader('Content-Type', type);
+      res.sendFile(path.join(clientRoot, route.slice(1)));
+    });
+  }
+  app.use('/client', express.static(path.join(clientRoot, 'client'), { index: false }));
+  app.use('/shared', express.static(path.join(clientRoot, 'shared'), { index: false }));
+  app.use('/assets', express.static(path.join(clientRoot, 'assets'), { index: false }));
 
   // Неизвестный API-маршрут — JSON 404.
   app.use('/api', (req, res) => {

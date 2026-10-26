@@ -6,7 +6,7 @@ function nowIso() {
 
 const SELECT_PARTICIPANT = `
   SELECT p.id, p.competition_id, p.block_id, p.number, p.name, p.title, p.group_size,
-    p.deleted_at, b.genre
+    p.nomination, p.category, p.city, p.leader, p.deleted_at, b.genre
   FROM participants p
   JOIN blocks b ON b.id = p.block_id`;
 
@@ -19,6 +19,10 @@ function toParticipant(r) {
     name: r.name,
     title: r.title,
     groupSize: r.group_size,
+    nomination: r.nomination,
+    category: r.category,
+    city: r.city,
+    leader: r.leader,
     deleted: r.deleted_at !== null,
   };
 }
@@ -29,6 +33,15 @@ function listBlockParticipants(db, blockId) {
     WHERE p.block_id = ? AND p.deleted_at IS NULL
     ORDER BY p.number, p.id
   `).all(blockId).map(toParticipant);
+}
+
+// Все неудалённые участники конкурса (для администратора).
+function listCompetitionParticipants(db, competitionId) {
+  return db.prepare(`
+    ${SELECT_PARTICIPANT}
+    WHERE p.competition_id = ? AND p.deleted_at IS NULL
+    ORDER BY p.number, p.id
+  `).all(competitionId).map(toParticipant);
 }
 
 function getParticipant(db, competitionId, id) {
@@ -45,22 +58,33 @@ function findActiveByNumber(db, competitionId, number, exceptId = 0) {
   `).get(competitionId, number, exceptId) || null;
 }
 
-function insertParticipant(db, competitionId, { blockId, number, name, title, groupSize }) {
+function insertParticipant(db, competitionId, {
+  blockId, number, name, title, groupSize, nomination, category, city, leader,
+}) {
   const ts = nowIso();
   const info = db.prepare(`
     INSERT INTO participants
-      (competition_id, block_id, number, name, title, group_size, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(competitionId, blockId, number, name, title, groupSize, ts, ts);
+      (competition_id, block_id, number, name, title, group_size, nomination, category, city, leader, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    competitionId, blockId, number, name, title, groupSize,
+    nomination, category, city, leader, ts, ts
+  );
   return Number(info.lastInsertRowid);
 }
 
-function updateParticipant(db, id, { number, name, title, groupSize }) {
+function updateParticipant(db, id, {
+  number, name, title, groupSize, nomination, category, city, leader,
+}) {
   db.prepare(`
     UPDATE participants
-    SET number = ?, name = ?, title = ?, group_size = ?, updated_at = ?
+    SET number = ?, name = ?, title = ?, group_size = ?,
+        nomination = ?, category = ?, city = ?, leader = ?, updated_at = ?
     WHERE id = ?
-  `).run(number, name, title, groupSize, nowIso(), id);
+  `).run(
+    number, name, title, groupSize,
+    nomination, category, city, leader, nowIso(), id
+  );
 }
 
 // Soft-delete: оценки остаются, участник скрывается из выдач.
@@ -72,9 +96,11 @@ function softDeleteParticipant(db, id) {
 
 module.exports = {
   listBlockParticipants,
+  listCompetitionParticipants,
   getParticipant,
   findActiveByNumber,
   insertParticipant,
   updateParticipant,
   softDeleteParticipant,
+  toParticipant,
 };

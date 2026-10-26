@@ -1,15 +1,13 @@
 'use strict';
 
 /* ==================== КОНСТАНТЫ ==================== */
-const STORAGE_KEY = 'lazurny_jury_data_v2';
-const SESSION_KEY = 'lazurny_jury_session_v2';
-const DEFAULT_PASSWORD = '123';     // стартовый пароль администратора и судей (меняется в «Настройках»)
-const ADMIN_PASS_MIN = 5;
-const ADMIN_PASS_MAX = 10;
-const JUDGE_PASS_LEN = 5;
-const JUDGES_MIN = 2;               // судей в блоке: от 2 до 4
+const THEME_KEY = 'lazurny_jury_theme_v1';
+const ADMIN_POLL_MS = 4000;
+const JUDGE_POLL_MS = 4000;
+const JUDGES_MIN = 2;        // сервер: от 2 до 8; на клиенте ограничиваем 4
 const JUDGES_MAX = 4;
 const MAX_SCORE = 10;
+const OUTBOX_BATCH = 50;
 
 const CONTEST_TITLE = 'IV Всероссийский многожанровый конкурс «Лазурный берег» 11 октября 2026г.';
 
@@ -29,112 +27,94 @@ const {
   grandPrixCount, prizeFor, computeBlockResults,
 } = window.LazurnyScoring;
 
-const TABS = ['participants', 'results', 'print', 'settings'];
+const TABS = ['participants', 'results', 'print', 'settings', 'access'];
 
 /* ==================== СОСТОЯНИЕ ==================== */
-/*
- {
-   version, updatedAt,
-   auth: { init, adminHash, judgeHash },     // judgeHash = null → вход судей без пароля
-   judges: [{ id, name }],                    // сквозной список судей (ФИО)
-   assignments: { [жанр]: [judgeId, ...] },   // назначения судей на блоки (2–4)
-   participants: [{ id, number, name, act, genre, nomination, category, city, groupSize, leader }],
-   scores: { [participantId]: { [judgeId]: { criteria: {key: n}, comment, savedAt } } }
- }
- groupSize: null — солист, число ≥ 2 — коллектив/дуэт.
-*/
-let state = loadFromLocal();
-let session = loadSession();     // { role: 'admin' } | { role: 'judge', genre, judgeId }
+let adminState = null;       // снимок /admin/state как есть
+let judgeState = null;       // снимок /judge/state как есть
+let state = emptyCompat();   // совместимая модель для рендера, печати и CSV
+let session = null;          // { role: 'admin' } | { role: 'judge', judgeId }
 let adminTab = 'participants';
-let judgeOpenPid = null;         // участник, которого судья оценивает сейчас
-let draft = null;                // черновик оценки: { pid, criteria, comment }
+
+let adminRevision = 0;
+let judgeRevision = 0;
+let adminPollTimer = null;
+let judgePollTimer = null;
+let adminRefreshing = false;
+let judgeRefreshing = false;
+let flushInFlight = false;
+let flushTimer = null;
+
+let judgeProfile = null;      // { id, fullName }
+let judgeBlockId = null;
+let judgeOpenPid = null;
+let draft = null;             // { pid, criteria, comment }
+let judgeOutbox = [];         // элементы outbox текущего судьи
+let pendingScores = {};       // { [participantId]: { criteria, comment, version } }
+let pendingAssignments = {};  // { [blockId]: [judgeId, ...] } — несохранённые правки админа
+let issuedInvitations = {};   // { [judgeId]: { token, url, expiresAt, qrSvg } }
+let judgeOnline = navigator.onLine;
 
 const $ = id => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
 
-/* ==================== ХРАНЕНИЕ ==================== */
-function defaultState() {
-  return {
-    version: 2,
-    updatedAt: 0,
-    auth: { init: false, adminHash: null, judgeHash: null },
-    judges: [],
-    assignments: {},
-    participants: [],
-    scores: {},
-  };
+function emptyCompat() {
+  return { judges: [], assignments: {}, participants: [], scores: {}, blocks: [] };
 }
 
-function loadFromLocal() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const s = { ...defaultState(), ...JSON.parse(raw) };
-      s.auth = { ...defaultState().auth, ...(s.auth || {}) };
-      return s;
+function buildCompatFromAdmin(s) {
+  const judges = (s.judges || []).map(j => ({
+    id: j.id, name: j.fullName, fullName: j.fullName,
+    deviceBound: Boolean(j.deviceBound),
+    deviceActivatedAt: j.deviceActivatedAt || null,
+    invitationIssuedAt: j.invitationIssuedAt || null,
+    invitationExpiresAt: j.invitationExpiresAt || null,
+  }));
+  const assignments = {};
+  for (const b of s.blocks || []) {
+    const ids = s.assignments?.[b.id] || [];
+    if (!assignments[b.genre]) assignments[b.genre] = [];
+    for (const id of ids) {
+      const num = Number(id);
+      if (!assignments[b.genre].includes(num)) assignments[b.genre].push(num);
     }
-  } catch (e) {
-    console.error('Ошибка чтения данных', e);
   }
-  return defaultState();
-}
-
-function saveToLocal() {
-  state.updatedAt = Date.now();
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (e) {
-    alert('Не удалось сохранить данные (память браузера заполнена).');
-    console.error(e);
+  const participants = (s.participants || []).map(p => ({ ...p, act: p.title }));
+  const scores = {};
+  for (const rec of s.scores || []) {
+    if (!scores[rec.participantId]) scores[rec.participantId] = {};
+    scores[rec.participantId][rec.judgeId] = {
+      criteria: rec.criteria,
+      comment: rec.comment,
+      savedAt: rec.createdAt || rec.receivedAt,
+      version: rec.version,
+    };
   }
-  syncWithServer(state).catch(err => console.warn('Ошибка синхронизации', err));
+  return { judges, assignments, participants, scores, blocks: s.blocks || [] };
 }
 
-/**
- * ЗАГЛУШКА синхронизации.
- * Сюда добавить отправку payload на сервер (например, Firebase Firestore).
- */
-async function syncWithServer(payload) {
-  return { ok: true, stub: true, size: JSON.stringify(payload).length };
-}
-
-function loadSession() {
-  try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY)) || null;
-  } catch (e) {
-    return null;
+function buildCompatFromJudge(s) {
+  const judges = [];
+  const assignments = {};
+  for (const b of s.blocks || []) {
+    const list = (s.judgesByBlock?.[b.id] || []).map(j => ({ id: j.id, name: j.fullName, fullName: j.fullName }));
+    assignments[b.genre] = list.map(j => Number(j.id));
+    for (const j of list) {
+      if (!judges.some(x => Number(x.id) === Number(j.id))) judges.push(j);
+    }
   }
-}
-
-function setSession(s) {
-  session = s;
-  if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
-  else localStorage.removeItem(SESSION_KEY);
-}
-
-/* Пароли: SHA-256 через crypto.subtle (нужен защищённый контекст: HTTPS или localhost/file в WebView). */
-async function sha256(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-/* ==================== ТЕМА ОФОРМЛЕНИЯ ==================== */
-/* Хранится на устройстве (не в данных конкурса). По умолчанию — тёмная. */
-const THEME_KEY = 'lazurny_jury_theme_v1';
-
-function currentTheme() {
-  return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
-}
-
-function applyTheme(theme) {
-  const t = theme === 'light' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = t;
-  localStorage.setItem(THEME_KEY, t);
-  $$('[data-theme-set]').forEach(b => {
-    const on = b.dataset.themeSet === t;
-    b.classList.toggle('btn-tab-on', on);
-    b.setAttribute('aria-pressed', on ? 'true' : 'false');
-  });
+  const participants = (s.participants || []).map(p => ({ ...p, act: p.title }));
+  const scores = {};
+  for (const rec of s.scores || []) {
+    if (!scores[rec.participantId]) scores[rec.participantId] = {};
+    scores[rec.participantId][rec.judgeId] = {
+      criteria: rec.criteria,
+      comment: rec.comment,
+      savedAt: rec.createdAt || rec.receivedAt,
+      version: rec.version,
+    };
+  }
+  return { judges, assignments, participants, scores, blocks: s.blocks || [] };
 }
 
 /* ==================== ВСПОМОГАТЕЛЬНЫЕ ==================== */
@@ -144,10 +124,6 @@ function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
-}
-
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
 function metaLine(p) {
@@ -160,18 +136,31 @@ function metaLine(p) {
 }
 
 function judgeName(id) {
-  return state.judges.find(j => j.id === id)?.name || 'Член жюри';
+  return state.judges.find(j => Number(j.id) === Number(id))?.name || 'Член жюри';
 }
 
 /* Судьи блока в порядке назначения. Номер «Судьи №N» — это позиция в этом списке. */
 function judgesFor(genre) {
   return (state.assignments[genre] || [])
-    .map(id => state.judges.find(j => j.id === id))
+    .map(id => state.judges.find(j => Number(j.id) === Number(id)))
     .filter(Boolean);
 }
 
 function getScore(pid, jid) {
-  return state.scores[pid]?.[jid] || null;
+  const base = state.scores?.[pid]?.[jid] || null;
+  if (session?.role === 'judge' && judgeProfile && Number(jid) === Number(judgeProfile.id)) {
+    const pend = pendingScores[pid];
+    if (pend) {
+      return {
+        criteria: pend.criteria,
+        comment: pend.comment,
+        savedAt: pend.createdAt,
+        version: pend.version,
+        pending: true,
+      };
+    }
+  }
+  return base;
 }
 
 function stamp() {
@@ -190,9 +179,38 @@ function downloadFile(name, content, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function setLoginError(id, message) {
+  const el = $(id);
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove('hidden');
+  } else {
+    el.textContent = '';
+    el.classList.add('hidden');
+  }
+}
+
+/* ==================== ТЕМА ОФОРМЛЕНИЯ ==================== */
+/* Хранится на устройстве (не секрет). По умолчанию — тёмная. */
+function currentTheme() {
+  return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+}
+
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem(THEME_KEY, t);
+  $$('[data-theme-set]').forEach(b => {
+    const on = b.dataset.themeSet === t;
+    b.classList.toggle('btn-tab-on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
 /* ==================== ВХОД / РОЛИ ==================== */
 function login(s) {
-  setSession(s);
+  session = s;
   judgeOpenPid = null;
   draft = null;
   render();
@@ -206,14 +224,11 @@ function resetLoginView() {
   $('btnJudgeToggle').classList.remove('hidden');
   $('adminPanel').classList.add('hidden');
   $('judgePanel').classList.add('hidden');
-  $('pinError').classList.add('hidden');
+  setLoginError('pinError', null);
+  setLoginError('judgeError', null);
 }
 
 function render() {
-  // Если судью сняли с блока, сессия становится недействительной
-  if (session?.role === 'judge' && !judgesFor(session.genre).some(j => j.id === session.judgeId)) {
-    setSession(null);
-  }
   const role = session?.role;
   if (!role) resetLoginView();
   show('screen-login', !role);
@@ -222,65 +237,200 @@ function render() {
   $('btnLogout').classList.toggle('hidden', !role);
   $('whoami').textContent =
     role === 'admin' ? 'Администратор'
-      : role === 'judge' ? `${judgeName(session.judgeId)} · ${session.genre}`
+      : role === 'judge' ? `${judgeProfile?.fullName || 'Член жюри'} · ${currentJudgeBlock()?.genre || ''}`
         : '';
 
   if (role === 'admin') renderAdmin();
   if (role === 'judge') renderJudge();
 }
 
+/* ==================== АДМИНИСТРАТОР: СЕССИЯ И ПОЛЛИНГ ==================== */
+async function tryRestoreAdmin() {
+  try {
+    const res = await LazurnyApi.admin.session();
+    LazurnyApi.setAdminCsrf(res.csrfToken);
+    adminRevision = 0;
+    adminState = null;
+    await refreshAdminState(true);
+    if (!adminState) return false;
+    if ((adminState.blocks || []).length === 0) {
+      await ensureBlocks();
+      await refreshAdminState(true);
+    }
+    login({ role: 'admin' });
+    startAdminPolling();
+    return true;
+  } catch (e) {
+    LazurnyApi.setAdminCsrf(null);
+    return false;
+  }
+}
+
 async function onAdminLogin() {
-  const h = await sha256($('adminPin').value);
-  if (h !== state.auth.adminHash) {
-    $('pinError').classList.remove('hidden');
+  const loginName = ($('adminLogin').value || 'admin').trim() || 'admin';
+  const password = $('adminPin').value;
+  if (!password) {
+    setLoginError('pinError', 'Введите пароль администратора');
     return;
   }
-  $('adminPin').value = '';
-  $('pinError').classList.add('hidden');
-  adminTab = 'participants';
-  login({ role: 'admin' });
+  try {
+    const res = await LazurnyApi.admin.login(loginName, password);
+    LazurnyApi.setAdminCsrf(res.csrfToken);
+    $('adminPin').value = '';
+    setLoginError('pinError', null);
+    adminRevision = 0;
+    adminState = null;
+    await refreshAdminState(true);
+    await ensureBlocks();
+    await refreshAdminState(true);
+    adminTab = 'participants';
+    login({ role: 'admin' });
+    startAdminPolling();
+  } catch (e) {
+    setLoginError('pinError', e.status === 429
+      ? 'Слишком много попыток входа. Попробуйте позже.'
+      : (e.message || 'Не удалось войти'));
+  }
 }
 
-function fillJudgeLoginSelect() {
-  const js = judgesFor($('judgeGenre').value);
-  $('judgeSelect').innerHTML = js.length
-    ? js.map(j => `<option value="${j.id}">${esc(j.name)}</option>`).join('')
-    : '<option value="">Нет назначенных членов жюри</option>';
-}
-
-async function onJudgeLogin() {
-  const genre = $('judgeGenre').value;
-  const jid = $('judgeSelect').value;
-  if (!jid) return alert('В этом блоке нет назначенных членов жюри. Обратитесь к администратору.');
-
-  if (state.auth.judgeHash) {
-    const h = await sha256($('judgePass').value);
-    if (h !== state.auth.judgeHash) {
-      $('judgeError').classList.remove('hidden');
-      return;
+async function ensureBlocks() {
+  if (!adminState) return;
+  const have = new Set((adminState.blocks || []).map(b => b.genre));
+  const missing = GENRES.filter(g => !have.has(g));
+  for (const g of missing) {
+    try {
+      await LazurnyApi.admin.blocks.create({
+        title: BLOCK_TITLE_DEFAULT[g] || g,
+        genre: g,
+      });
+    } catch (e) {
+      console.warn('Не удалось создать блок', g, e);
     }
   }
-  $('judgePass').value = '';
-  $('judgeError').classList.add('hidden');
-  login({ role: 'judge', genre, judgeId: jid });
 }
 
-/* ==================== АДМИНИСТРАТОР ==================== */
+async function refreshAdminState(force) {
+  if (adminRefreshing) return;
+  adminRefreshing = true;
+  let ok = false;
+  try {
+    const res = await LazurnyApi.admin.state(force ? 0 : adminRevision);
+    if (res.changed) {
+      adminState = res.state;
+      adminRevision = res.revision;
+      state = buildCompatFromAdmin(adminState);
+      render();
+    } else {
+      adminRevision = res.revision;
+    }
+    ok = true;
+  } catch (e) {
+    if (e.status === 401) {
+      adminAuthLost();
+      return;
+    }
+    if (!e.offline) console.warn('Ошибка состояния администратора', e);
+  } finally {
+    adminRefreshing = false;
+  }
+  if (ok) { /* снимок обновлён */ }
+}
+
+function startAdminPolling() {
+  stopAdminPolling();
+  adminPollTimer = setInterval(() => refreshAdminState(false), ADMIN_POLL_MS);
+}
+
+function stopAdminPolling() {
+  if (adminPollTimer) {
+    clearInterval(adminPollTimer);
+    adminPollTimer = null;
+  }
+}
+
+function adminAuthLost() {
+  stopAdminPolling();
+  LazurnyApi.setAdminCsrf(null);
+  adminState = null;
+  adminRevision = 0;
+  state = emptyCompat();
+  session = null;
+  render();
+  setLoginError('pinError', 'Сессия администратора истекла. Войдите снова.');
+}
+
+async function onLogout() {
+  if (session?.role === 'admin') {
+    try { await LazurnyApi.admin.logout(); } catch (e) { console.warn('Выход администратора', e); }
+    stopAdminPolling();
+    LazurnyApi.setAdminCsrf(null);
+    adminState = null;
+    adminRevision = 0;
+  } else if (session?.role === 'judge') {
+    stopJudgePolling();
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    LazurnyApi.setJudgeToken(null);
+    judgeProfile = null;
+    judgeState = null;
+    judgeRevision = 0;
+    judgeOutbox = [];
+    pendingScores = {};
+    try {
+      await LazurnyIdb.deleteMeta('deviceToken');
+      await LazurnyIdb.deleteMeta('judgeProfile');
+      await LazurnyIdb.deleteCache('judgeState');
+    } catch (e) { console.warn('Очистка данных судьи', e); }
+  }
+  state = emptyCompat();
+  session = null;
+  login(null);
+}
+
+/* ==================== АДМИНИСТРАТОР: РЕНДЕР ==================== */
 function renderAdmin() {
   $$('[data-tab]').forEach(b => b.classList.toggle('btn-tab-on', b.dataset.tab === adminTab));
   TABS.forEach(t => show('tab-' + t, t === adminTab));
+  if (!adminState) return;
 
+  fillBlockSelects();
   if (adminTab === 'participants') renderParticipants();
   if (adminTab === 'results') $('resultsBox').innerHTML = GENRES.map(resultsBlockHtml).join('');
   if (adminTab === 'print') fillPrintMode();
   if (adminTab === 'settings') renderSettings();
+  if (adminTab === 'access') renderAccess();
+}
+
+function blockTitleForGenre(genre) {
+  const b = (adminState?.blocks || []).find(x => x.genre === genre);
+  return b?.title || BLOCK_TITLE_DEFAULT[genre] || genre.toUpperCase();
+}
+
+function fillBlockSelects() {
+  const sel = $('genreSelect');
+  if (!sel) return;
+  const prev = sel.value;
+  const blocks = adminState?.blocks || [];
+  sel.innerHTML = blocks.length
+    ? blocks.map(b => `<option value="${b.id}">${esc(b.genre)} — ${esc(b.title)}</option>`).join('')
+    : '<option value="">Блоков нет</option>';
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+
+  const printSel = $('printGenre');
+  if (printSel && !printSel.options.length) {
+    printSel.innerHTML = GENRES.map(g => `<option>${esc(g)}</option>`).join('');
+  }
+  const nameInput = $('printBlockName');
+  if (nameInput && !nameInput.value && printSel) {
+    nameInput.value = blockTitleForGenre(printSel.value || GENRES[0]);
+  }
 }
 
 function renderParticipants() {
+  if (!adminState) return;
   const list = [...state.participants].sort((a, b) => a.number - b.number);
   $('participantsBody').innerHTML = list.length
     ? list.map(rowHtml).join('')
-    : `<tr><td colspan="5" class="empty">Участников пока нет</td></tr>`;
+    : '<tr><td colspan="5" class="empty">Участников пока нет</td></tr>';
 }
 
 function rowHtml(p) {
@@ -298,56 +448,60 @@ function rowHtml(p) {
     </tr>`;
 }
 
-function onAddParticipant(e) {
+function onTableClick(e) {
+  const btn = e.target.closest('button[data-act="del"]');
+  if (btn) deleteParticipant(Number(btn.dataset.id));
+}
+
+async function onAddParticipant(e) {
   e.preventDefault();
   const f = e.target;
   const fd = new FormData(f);
+  const blockId = Number(fd.get('blockId'));
   const number = Number(fd.get('number'));
   const name = String(fd.get('name') || '').trim();
   const act = String(fd.get('act') || '').trim();
-  const genre = String(fd.get('genre') || '');
   const gsRaw = String(fd.get('groupSize') || '').trim();
   const groupSize = gsRaw === '' ? null : Number(gsRaw);
 
+  if (!blockId || !(adminState?.blocks || []).some(b => Number(b.id) === blockId)) {
+    return alert('Выберите блок');
+  }
   if (!Number.isInteger(number) || number < 1) return alert('Номер должен быть целым числом от 1');
-  if (state.participants.some(p => p.number === number)) return alert(`Номер ${number} уже занят`);
   if (!name || !act) return alert('Заполните название коллектива/ФИО и название номера');
-  if (!GENRES.includes(genre)) return alert('Выберите жанр (блок)');
   if (groupSize !== null && (!Number.isInteger(groupSize) || groupSize < 1)) {
     return alert('Количество участников — целое число от 1. Для солиста оставьте пусто.');
   }
 
-  state.participants.push({
-    id: uid(),
-    number,
-    name,
-    act,
-    genre,
-    nomination: String(fd.get('nomination') || '').trim(),
-    category: String(fd.get('category') || '').trim(),
-    city: String(fd.get('city') || '').trim(),
-    groupSize: groupSize !== null && groupSize >= 2 ? groupSize : null,
-    leader: String(fd.get('leader') || '').trim(),
-  });
-
-  saveToLocal();
-  f.reset();
-  render();
-  f.querySelector('[name="number"]').focus();
+  try {
+    await LazurnyApi.admin.participants.create({
+      blockId,
+      number,
+      name,
+      title: act,
+      groupSize,
+      nomination: String(fd.get('nomination') || '').trim(),
+      category: String(fd.get('category') || '').trim(),
+      city: String(fd.get('city') || '').trim(),
+      leader: String(fd.get('leader') || '').trim(),
+    });
+    f.reset();
+    await refreshAdminState(true);
+    f.querySelector('[name="number"]').focus();
+  } catch (err) {
+    alert(err.message || 'Не удалось добавить участника');
+  }
 }
 
-function onTableClick(e) {
-  const btn = e.target.closest('button[data-act="del"]');
-  if (btn) deleteParticipant(btn.dataset.id);
-}
-
-function deleteParticipant(id) {
-  const p = state.participants.find(x => x.id === id);
+async function deleteParticipant(id) {
+  const p = (adminState?.participants || []).find(x => Number(x.id) === Number(id));
   if (!p || !confirm(`Удалить участника №${p.number} «${p.name}»?`)) return;
-  state.participants = state.participants.filter(x => x.id !== id);
-  delete state.scores[id];
-  saveToLocal();
-  render();
+  try {
+    await LazurnyApi.admin.participants.remove(Number(id));
+    await refreshAdminState(true);
+  } catch (err) {
+    alert(err.message || 'Не удалось удалить участника');
+  }
 }
 
 /* ---------- Подсчёт результатов по блоку (формулы в shared/scoring.js) ---------- */
@@ -393,6 +547,7 @@ function resultsBlockHtml(genre) {
 
 /* ---------- Экспорт CSV (разделитель «;») ---------- */
 function exportCSV() {
+  if (!adminState) return alert('Данные ещё не загружены');
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const row = arr => arr.map(q).join(';');
   const num = v => (v === null || v === undefined ? '' : v.toFixed(2).replace('.', ','));
@@ -436,119 +591,229 @@ function exportCSV() {
   downloadFile(`jury_results_${stamp()}.csv`, '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
 }
 
-/* ---------- Настройки: судьи, назначения, пароли ---------- */
+/* ==================== АДМИНИСТРАТОР: НАСТРОЙКИ ==================== */
 function renderSettings() {
-  $('judgesList').innerHTML = state.judges.length
-    ? state.judges.map(j => `
+  if (!adminState) return;
+
+  $('judgesList').innerHTML = adminState.judges.length
+    ? adminState.judges.map(j => `
         <div class="judge-row">
-          <span>${esc(j.name)}</span>
+          <span>${esc(j.fullName)}</span>
           <button class="btn btn-ghost btn-sm" data-act="deljudge" data-id="${j.id}">Удалить</button>
         </div>`).join('')
     : '<p class="sub">Членов жюри пока нет. Добавьте ФИО.</p>';
 
-  $('assignBox').innerHTML = GENRES.map(g => {
-    const ids = state.assignments[g] || [];
-    const n = ids.length;
-    const ok = n >= JUDGES_MIN && n <= JUDGES_MAX;
-    const boxes = state.judges.map(j => `
-        <label class="check">
-          <input type="checkbox" data-genre="${esc(g)}" data-jid="${j.id}" ${ids.includes(j.id) ? 'checked' : ''}>
-          ${esc(j.name)}
-        </label>`).join('') || '<p class="sub">Сначала добавьте членов жюри</p>';
-    return `
-      <div class="assign-block">
-        <h3>${esc(g)}</h3>
-        <div class="check-list">${boxes}</div>
-        <p class="${ok ? 'ok' : 'warn'}">Назначено: ${n} (нужно от ${JUDGES_MIN} до ${JUDGES_MAX})</p>
-      </div>`;
-  }).join('');
-
-  $('judgePassStatus').textContent = state.auth.judgeHash
-    ? 'Пароль жюри установлен.'
-    : 'Пароль жюри удалён: вход без пароля.';
-  $('btnDelJudgePass').disabled = !state.auth.judgeHash;
+  const blocks = adminState.blocks || [];
+  $('assignBox').innerHTML = blocks.length
+    ? blocks.map(b => {
+        const savedIds = (adminState.assignments?.[b.id] || []).map(Number);
+        const ids = pendingAssignments[b.id] ? pendingAssignments[b.id].map(Number) : savedIds;
+        const n = ids.length;
+        const ok = n >= JUDGES_MIN && n <= JUDGES_MAX;
+        const dirty = pendingAssignments[b.id] !== undefined;
+        const boxes = adminState.judges.map(j => `
+            <label class="check">
+              <input type="checkbox" data-block-id="${b.id}" data-jid="${j.id}" ${ids.includes(Number(j.id)) ? 'checked' : ''}>
+              ${esc(j.fullName)}
+            </label>`).join('') || '<p class="sub">Сначала добавьте членов жюри</p>';
+        return `
+          <div class="assign-block">
+            <h3>${esc(b.genre)} — ${esc(b.title)}</h3>
+            <div class="check-list">${boxes}</div>
+            <p class="${ok ? 'ok' : 'warn'}">Назначено: ${n} (клиент допускает от ${JUDGES_MIN} до ${JUDGES_MAX})</p>
+            <button class="btn btn-primary btn-sm" data-save-block="${b.id}">Сохранить назначения</button>
+            ${dirty ? '<span class="sub"> Есть несохранённые изменения</span>' : ''}
+          </div>`;
+      }).join('')
+    : '<p class="sub">Блоков нет. Они создаются автоматически при входе администратора.</p>';
 }
 
 async function onAddJudge(e) {
   e.preventDefault();
   const name = $('judgeName').value.trim();
   if (!name) return;
-  state.judges.push({ id: uid(), name });
-  saveToLocal();
-  e.target.reset();
-  render();
+  try {
+    await LazurnyApi.admin.judges.create(name);
+    e.target.reset();
+    await refreshAdminState(true);
+  } catch (err) {
+    alert(err.message || 'Не удалось добавить члена жюри');
+  }
 }
 
 function onJudgesListClick(e) {
   const btn = e.target.closest('button[data-act="deljudge"]');
-  if (btn) deleteJudge(btn.dataset.id);
+  if (btn) deleteJudge(Number(btn.dataset.id));
 }
 
-function deleteJudge(id) {
-  const j = state.judges.find(x => x.id === id);
+async function deleteJudge(id) {
+  const j = (adminState?.judges || []).find(x => Number(x.id) === Number(id));
   if (!j) return;
-  if (!confirm(`Удалить члена жюри «${j.name}»? Он будет снят со всех блоков, его оценки перестанут учитываться в итогах.`)) return;
-  state.judges = state.judges.filter(x => x.id !== id);
-  Object.keys(state.assignments).forEach(g => {
-    state.assignments[g] = state.assignments[g].filter(x => x !== id);
-  });
-  saveToLocal();
-  render();
+  if (!confirm(`Удалить члена жюри «${j.fullName}»?`)) return;
+  try {
+    await LazurnyApi.admin.judges.remove(Number(id));
+    await refreshAdminState(true);
+  } catch (err) {
+    alert(err.message || 'Не удалось удалить члена жюри');
+  }
 }
 
 function onAssignChange(e) {
-  const cb = e.target.closest('input[type="checkbox"][data-genre]');
+  const cb = e.target.closest('input[type="checkbox"][data-block-id]');
   if (!cb) return;
-  const g = cb.dataset.genre;
-  const jid = cb.dataset.jid;
-  const ids = state.assignments[g] || [];
+  const blockId = Number(cb.dataset.blockId);
+  const jid = Number(cb.dataset.jid);
+  const current = pendingAssignments[blockId]
+    ? [...pendingAssignments[blockId]]
+    : (adminState?.assignments?.[blockId] || []).map(Number);
 
   if (cb.checked) {
-    if (ids.length >= JUDGES_MAX) {
+    if (current.length >= JUDGES_MAX) {
       cb.checked = false;
-      return alert(`В блоке не больше ${JUDGES_MAX} членов жюри. Снимите лишнего.`);
+      return alert(`В блоке не больше ${JUDGES_MAX} членов жюри на клиенте. Снимите лишнего.`);
     }
-    state.assignments[g] = [...ids, jid];
+    if (!current.includes(jid)) current.push(jid);
   } else {
-    state.assignments[g] = ids.filter(x => x !== jid);
+    const idx = current.indexOf(jid);
+    if (idx >= 0) current.splice(idx, 1);
   }
-  saveToLocal();
-  render();
+  pendingAssignments[blockId] = current;
+  renderSettings();
+}
+
+async function onSaveAssignments(blockId) {
+  const known = new Set((adminState?.judges || []).map(j => Number(j.id)));
+  const ids = (pendingAssignments[blockId] || adminState?.assignments?.[blockId] || [])
+    .map(Number).filter(id => known.has(id));
+  if (ids.length < JUDGES_MIN || ids.length > JUDGES_MAX) {
+    return alert(`В блоке должно быть от ${JUDGES_MIN} до ${JUDGES_MAX} членов жюри`);
+  }
+  try {
+    await LazurnyApi.admin.blocks.setJudges(Number(blockId), ids);
+    delete pendingAssignments[blockId];
+    await refreshAdminState(true);
+  } catch (err) {
+    alert(err.message || 'Не удалось сохранить назначения');
+  }
 }
 
 async function setAdminPass() {
-  const v = $('newAdminPass').value;
-  if (v.length < ADMIN_PASS_MIN || v.length > ADMIN_PASS_MAX) {
-    return alert(`Пароль администратора: от ${ADMIN_PASS_MIN} до ${ADMIN_PASS_MAX} символов`);
+  const currentPassword = $('currentAdminPass').value;
+  const newPassword = $('newAdminPass').value;
+  if (!currentPassword) return alert('Введите текущий пароль администратора');
+  if (newPassword.length < 12) return alert('Новый пароль — не короче 12 символов');
+  try {
+    const res = await LazurnyApi.admin.changePassword(currentPassword, newPassword);
+    LazurnyApi.setAdminCsrf(res.csrfToken);
+    $('currentAdminPass').value = '';
+    $('newAdminPass').value = '';
+    alert('Пароль администратора изменён');
+  } catch (err) {
+    alert(err.message || 'Не удалось сменить пароль');
   }
-  state.auth.adminHash = await sha256(v);
-  saveToLocal();
-  $('newAdminPass').value = '';
-  alert('Пароль администратора изменён');
 }
 
-async function setJudgePass() {
-  const v = $('newJudgePass').value;
-  if (v.length !== JUDGE_PASS_LEN) {
-    return alert(`Пароль жюри — ровно ${JUDGE_PASS_LEN} символов`);
+/* ==================== АДМИНИСТРАТОР: ДОСТУП (QR) ==================== */
+function accessStatus(j) {
+  if (j.deviceBound) {
+    const at = j.deviceActivatedAt ? ` (${new Date(j.deviceActivatedAt).toLocaleString()})` : '';
+    return 'Устройство привязано' + at;
   }
-  state.auth.judgeHash = await sha256(v);
-  saveToLocal();
-  $('newJudgePass').value = '';
-  render();
-  alert('Пароль жюри сохранён');
+  if (j.invitationExpiresAt) {
+    return 'Приглашение выдано до ' + new Date(j.invitationExpiresAt).toLocaleString();
+  }
+  return 'Доступа нет';
 }
 
-function deleteJudgePass() {
-  if (!confirm('Удалить пароль жюри? Вход будет без пароля, пока не установите новый.')) return;
-  state.auth.judgeHash = null;
-  saveToLocal();
-  render();
+function qrBlockHtml(inv) {
+  const svg = inv.qrSvg && String(inv.qrSvg).trim().startsWith('<svg')
+    ? `<div class="qr-svg">${inv.qrSvg}</div>`
+    : '';
+  return `
+    <div class="qr-card">
+      ${svg}
+      <p class="sub">Ссылка для судьи:</p>
+      <input class="input" readonly value="${esc(inv.url)}">
+      <p class="sub">Токен (если QR не сработал):</p>
+      <input class="input" readonly value="${esc(inv.token)}">
+      <p class="sub">Действует до ${esc(new Date(inv.expiresAt).toLocaleString())}.</p>
+    </div>`;
+}
+
+function renderAccess() {
+  if (!adminState) return;
+  const judges = adminState.judges || [];
+  if (!judges.length) {
+    $('accessBox').innerHTML = '<p class="sub">Сначала добавьте членов жюри в «Настройках».</p>';
+    return;
+  }
+  $('accessBox').innerHTML = judges.map(j => {
+    const inv = issuedInvitations[j.id];
+    const hasAccess = j.deviceBound || j.invitationExpiresAt;
+    return `
+      <div class="assign-block">
+        <h3>${esc(j.fullName)}</h3>
+        <p class="sub">${esc(accessStatus(j))}</p>
+        <div class="toolbar">
+          <button class="btn btn-primary btn-sm" data-act="issue" data-jid="${j.id}">
+            ${hasAccess ? 'Перевыпустить QR' : 'Выпустить QR'}
+          </button>
+          ${hasAccess ? `<button class="btn btn-ghost btn-sm" data-act="revoke" data-jid="${j.id}">Отозвать доступ</button>` : ''}
+          ${inv ? `<button class="btn btn-accent btn-sm" data-act="print" data-jid="${j.id}">Печать приглашения</button>` : ''}
+        </div>
+        ${inv ? qrBlockHtml(inv) : ''}
+      </div>`;
+  }).join('');
+}
+
+async function issueInvitation(judgeId) {
+  try {
+    const res = await LazurnyApi.admin.invitations.issue([Number(judgeId)]);
+    const inv = (res.invitations || [])[0];
+    if (inv) issuedInvitations[judgeId] = inv;
+    await refreshAdminState(true);
+    if (adminTab === 'access') renderAccess();
+  } catch (err) {
+    alert(err.message || 'Не удалось выпустить приглашение');
+  }
+}
+
+async function revokeInvitation(judgeId) {
+  if (!confirm('Отозвать доступ этого судьи? Активное устройство и приглашение будут закрыты.')) return;
+  try {
+    await LazurnyApi.admin.invitations.revoke(Number(judgeId));
+    delete issuedInvitations[judgeId];
+    await refreshAdminState(true);
+    if (adminTab === 'access') renderAccess();
+  } catch (err) {
+    alert(err.message || 'Не удалось отозвать доступ');
+  }
+}
+
+function printInvitation(judgeId) {
+  const inv = issuedInvitations[judgeId];
+  if (!inv) return alert('Сначала выпустите приглашение');
+  const judge = (adminState?.judges || []).find(j => Number(j.id) === Number(judgeId));
+  const qr = inv.qrSvg && String(inv.qrSvg).trim().startsWith('<svg')
+    ? `<div class="qr-svg">${inv.qrSvg}</div>`
+    : `<div class="qr-fallback">
+        <p>Ссылка: ${esc(inv.url)}</p>
+        <p>Токен: ${esc(inv.token)}</p>
+      </div>`;
+  $('pageStyle').textContent = '@page { size: A4 portrait; margin: 12mm; }';
+  $('printRoot').innerHTML = `
+    <div class="sheet">
+      <div class="p-contest">${esc(CONTEST_TITLE)}</div>
+      <h2 class="p-block">Приглашение члена жюри</h2>
+      <p class="p-judge">${esc(judge?.fullName || '')}</p>
+      ${qr}
+      <p class="p-mode">Откройте ссылку или отсканируйте QR-код. Приглашение одноразовое.
+        Срок действия до ${esc(new Date(inv.expiresAt).toLocaleString())}.</p>
+    </div>`;
+  window.print();
 }
 
 /* ==================== ПЕЧАТЬ ==================== */
-
-/* Заголовок колонки критерия — как в бумажном бланке. */
 function critHeader(c) {
   return c.label || `${c.group} / ${c.solo}`;
 }
@@ -557,9 +822,10 @@ function critHeader(c) {
    mode === 'avg' — среднее по судьям блока, иначе — баллы конкретного судьи. */
 function protocolValues(p, mode) {
   const judges = judgesFor(p.genre);
+  const jid = mode === 'avg' ? null : Number(mode);
   const recs = mode === 'avg'
     ? judges.map(j => getScore(p.id, j.id)).filter(Boolean)
-    : [getScore(p.id, mode)].filter(Boolean);
+    : [getScore(p.id, jid)].filter(Boolean);
 
   const vals = {};
   getCriteria(p).forEach(c => {
@@ -576,7 +842,7 @@ function fmtScore(v, mode) {
 }
 
 function judgeLabel(genre, jid) {
-  const idx = judgesFor(genre).findIndex(j => j.id === jid);
+  const idx = judgesFor(genre).findIndex(j => Number(j.id) === Number(jid));
   return idx < 0 ? 'член жюри' : `Член жюри №${idx + 1} (${judgeName(jid)})`;
 }
 
@@ -646,7 +912,7 @@ function buildProtocolHtml(genre, title, mode) {
 function printProtocol() {
   const genre = $('printGenre').value;
   const mode = $('printMode').value;
-  const title = $('printBlockName').value.trim() || BLOCK_TITLE_DEFAULT[genre] || genre.toUpperCase();
+  const title = $('printBlockName').value.trim() || blockTitleForGenre(genre);
 
   const hasAny = state.participants.some(p => p.genre === genre);
   if (!hasAny) return alert(`В блоке «${genre}» нет участников`);
@@ -663,7 +929,7 @@ function printAll() {
     return `
       <div class="sheet">
         <div class="p-contest">${esc(CONTEST_TITLE)}</div>
-        <h2 class="p-block">Итоговый протокол. ${esc(BLOCK_TITLE_DEFAULT[g] || g)}</h2>
+        <h2 class="p-block">Итоговый протокол. ${esc(blockTitleForGenre(g))}</h2>
         <div class="p-mode">Жюри: ${b.judges.map(j => esc(j.name)).join(', ') || '—'}.
           Участников: ${b.n}. Гран-при по таблице: ${b.gpTable}. Набрали 10,00: ${b.gpActual}.</div>
         <table class="p-table">
@@ -709,15 +975,351 @@ function fillPrintMode() {
   if ([...$('printMode').options].some(o => o.value === prev)) $('printMode').value = prev;
 }
 
-/* ==================== СУДЬЯ ==================== */
+/* ==================== СУДЬЯ: ВХОД И СОСТОЯНИЕ ==================== */
+function currentJudgeBlock() {
+  const blocks = judgeState?.blocks || [];
+  return blocks.find(b => Number(b.id) === Number(judgeBlockId)) || blocks[0] || null;
+}
+
+function judgeParticipants() {
+  const block = currentJudgeBlock();
+  if (!block) return [];
+  return state.participants
+    .filter(p => Number(p.blockId) === Number(block.id))
+    .sort((a, b) => a.number - b.number);
+}
+
+function syncJudgeBlockSelection() {
+  const blocks = judgeState?.blocks || [];
+  const sel = $('judgeBlockSelect');
+  if (!sel) return;
+  if (blocks.length <= 1) {
+    judgeBlockId = blocks[0]?.id ?? null;
+    $('judgeBlockBar').classList.add('hidden');
+    sel.innerHTML = '';
+    return;
+  }
+  $('judgeBlockBar').classList.remove('hidden');
+  const prev = judgeBlockId;
+  sel.innerHTML = blocks.map(b => `<option value="${b.id}">${esc(b.genre)} — ${esc(b.title)}</option>`).join('');
+  if (blocks.some(b => Number(b.id) === Number(prev))) sel.value = String(prev);
+  else {
+    judgeBlockId = blocks[0].id;
+    sel.value = String(judgeBlockId);
+  }
+}
+
+function setSyncStatus(text) {
+  const el = $('judgeSyncStatus');
+  if (el) el.textContent = text || '';
+}
+
+async function tryJudgeTokenFromUrl() {
+  let url;
+  try { url = new URL(location.href); } catch (e) { return false; }
+  const token = url.searchParams.get('judge_token');
+  if (!token) return false;
+  url.searchParams.delete('judge_token');
+  history.replaceState({}, '', url.pathname + url.search + url.hash);
+  try {
+    const res = await LazurnyApi.judge.auth(token);
+    await acceptJudgeAuth(res);
+    return true;
+  } catch (e) {
+    setLoginError('judgeError', 'Приглашение недействительно или истекло: ' + (e.message || 'ошибка'));
+    return false;
+  }
+}
+
+async function acceptJudgeAuth(res) {
+  const oldProfile = await LazurnyIdb.getMeta('judgeProfile');
+  if (oldProfile && Number(oldProfile.id) !== Number(res.judge.id)) {
+    await LazurnyIdb.outboxClear();
+    await LazurnyIdb.deleteCache('judgeState');
+  }
+  LazurnyApi.setJudgeToken(res.deviceToken);
+  judgeProfile = { id: res.judge.id, fullName: res.judge.fullName };
+  await LazurnyIdb.setMeta('deviceToken', res.deviceToken);
+  await LazurnyIdb.setMeta('judgeProfile', judgeProfile);
+  session = { role: 'judge', judgeId: judgeProfile.id };
+  judgeRevision = 0;
+  judgeState = null;
+  await loadJudgeOutbox();
+  await refreshJudgeState(true);
+  syncJudgeBlockSelection();
+  render();
+  startJudgePolling();
+  flushOutbox();
+}
+
+async function tryRestoreJudge() {
+  let token = null;
+  let profile = null;
+  try {
+    token = await LazurnyIdb.getMeta('deviceToken');
+    profile = await LazurnyIdb.getMeta('judgeProfile');
+  } catch (e) { return false; }
+  if (!token || !profile) return false;
+  LazurnyApi.setJudgeToken(token);
+  judgeProfile = profile;
+  session = { role: 'judge', judgeId: profile.id };
+  judgeRevision = 0;
+  judgeState = null;
+  try {
+    const cached = await LazurnyIdb.getCache('judgeState');
+    if (cached && cached.state) {
+      judgeState = cached.state;
+      judgeRevision = cached.revision || 0;
+      state = buildCompatFromJudge(judgeState);
+    }
+  } catch (e) { /* кэш необязателен */ }
+  await loadJudgeOutbox();
+  syncJudgeBlockSelection();
+  render();
+  startJudgePolling();
+  refreshJudgeState(false).then(() => flushOutbox());
+  return true;
+}
+
+async function onJudgeLogin() {
+  const token = $('judgeToken').value.trim();
+  if (!token) {
+    setLoginError('judgeError', 'Вставьте токен из приглашения');
+    return;
+  }
+  try {
+    const res = await LazurnyApi.judge.auth(token);
+    $('judgeToken').value = '';
+    setLoginError('judgeError', null);
+    await acceptJudgeAuth(res);
+  } catch (e) {
+    setLoginError('judgeError', e.status === 429
+      ? 'Слишком много попыток. Попробуйте позже.'
+      : (e.message || 'Не удалось войти по токену'));
+  }
+}
+
+async function judgeAuthLost() {
+  stopJudgePolling();
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  LazurnyApi.setJudgeToken(null);
+  judgeProfile = null;
+  judgeState = null;
+  judgeRevision = 0;
+  judgeOutbox = [];
+  pendingScores = {};
+  try {
+    await LazurnyIdb.deleteMeta('deviceToken');
+    await LazurnyIdb.deleteMeta('judgeProfile');
+    await LazurnyIdb.deleteCache('judgeState');
+  } catch (e) { console.warn('Очистка доступа судьи', e); }
+  state = emptyCompat();
+  session = null;
+  render();
+  setLoginError('judgeError', 'Доступ отозван. Попросите администратора выпустить новый QR.');
+}
+
+async function refreshJudgeState(force) {
+  if (!judgeProfile || judgeRefreshing) return;
+  judgeRefreshing = true;
+  let ok = false;
+  try {
+    const res = await LazurnyApi.judge.state(force ? 0 : judgeRevision);
+    if (res.changed) {
+      judgeState = res.state;
+      judgeRevision = res.revision;
+      state = buildCompatFromJudge(judgeState);
+      try {
+        await LazurnyIdb.setCache('judgeState', { revision: judgeRevision, state: judgeState });
+      } catch (e) { console.warn('Кэш состояния', e); }
+      syncJudgeBlockSelection();
+      render();
+    } else {
+      judgeRevision = res.revision;
+    }
+    ok = true;
+  } catch (e) {
+    if (e.status === 401) {
+      await judgeAuthLost();
+      return;
+    }
+    if (e.offline) setSyncStatus('Ожидает связи');
+    else console.warn('Ошибка состояния судьи', e);
+  } finally {
+    judgeRefreshing = false;
+  }
+  if (ok && judgeOutbox.length) flushOutbox();
+}
+
+function startJudgePolling() {
+  stopJudgePolling();
+  judgePollTimer = setInterval(() => refreshJudgeState(false), JUDGE_POLL_MS);
+}
+
+function stopJudgePolling() {
+  if (judgePollTimer) {
+    clearInterval(judgePollTimer);
+    judgePollTimer = null;
+  }
+}
+
+/* ==================== СУДЬЯ: OUTBOX И СИНХРОНИЗАЦИЯ ==================== */
+async function loadJudgeOutbox() {
+  try {
+    const all = await LazurnyIdb.outboxAll();
+    judgeOutbox = (all || []).filter(i => !i.judgeId || Number(i.judgeId) === Number(judgeProfile?.id));
+  } catch (e) {
+    judgeOutbox = [];
+  }
+  rebuildPendingScores();
+}
+
+function rebuildPendingScores() {
+  pendingScores = {};
+  for (const item of judgeOutbox) {
+    const pid = Number(item.participantId);
+    const cur = pendingScores[pid];
+    if (!cur || Number(item.version) > Number(cur.version)) {
+      pendingScores[pid] = {
+        criteria: item.criteria,
+        comment: item.comment,
+        version: item.version,
+        changeId: item.changeId,
+        createdAt: item.createdAt,
+      };
+    }
+  }
+}
+
+function nextVersion(pid) {
+  let max = 0;
+  for (const rec of judgeState?.scores || []) {
+    if (Number(rec.participantId) === Number(pid)) max = Math.max(max, Number(rec.version) || 0);
+  }
+  for (const item of judgeOutbox) {
+    if (Number(item.participantId) === Number(pid)) max = Math.max(max, Number(item.version) || 0);
+  }
+  return max + 1;
+}
+
+function newChangeId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function saveScoreLocal(pid, criteria, comment) {
+  if (!judgeProfile) return;
+  const item = {
+    changeId: newChangeId(),
+    judgeId: judgeProfile.id,
+    participantId: Number(pid),
+    version: nextVersion(pid),
+    criteria,
+    comment: comment || null,
+    createdAt: new Date().toISOString(),
+    attempts: 0,
+    nextAttemptAt: 0,
+    lastError: null,
+  };
+  await LazurnyIdb.outboxPut(item);
+  judgeOutbox.push(item);
+  rebuildPendingScores();
+  setSyncStatus('Сохранено локально');
+  render();
+  flushOutbox();
+}
+
+async function flushOutbox() {
+  if (flushInFlight || !judgeProfile) return;
+  if (!judgeOnline) {
+    setSyncStatus('Ожидает связи');
+    return;
+  }
+  const now = Date.now();
+  const ready = judgeOutbox.filter(i => !i.nextAttemptAt || Number(i.nextAttemptAt) <= now);
+  if (!ready.length) {
+    setSyncStatus(judgeOutbox.length ? 'Ожидает связи' : 'Отправлено');
+    return;
+  }
+  flushInFlight = true;
+  try {
+    const batch = ready.slice(0, OUTBOX_BATCH).map(i => ({
+      changeId: i.changeId,
+      participantId: Number(i.participantId),
+      version: Number(i.version),
+      criteria: i.criteria,
+      comment: i.comment || null,
+    }));
+    const res = await LazurnyApi.judge.sendScores(batch);
+    let needRefresh = false;
+    let errorText = '';
+    for (const r of res.results || []) {
+      const item = judgeOutbox.find(i => i.changeId === r.changeId);
+      if (!item) continue;
+      if (r.result === 'accepted' || r.result === 'duplicate' || r.result === 'stale') {
+        await LazurnyIdb.outboxDelete(r.changeId);
+        judgeOutbox = judgeOutbox.filter(i => i.changeId !== r.changeId);
+        // accepted: сервер уже записал оценку, нужен свежий снимок с версией.
+        needRefresh = true;
+      } else if (r.result === 'rejected') {
+        await LazurnyIdb.outboxDelete(r.changeId);
+        judgeOutbox = judgeOutbox.filter(i => i.changeId !== r.changeId);
+        errorText = r.error || 'Оценка отклонена';
+        needRefresh = true;
+      }
+    }
+    rebuildPendingScores();
+    if (errorText) setSyncStatus('Ошибка: ' + errorText);
+    else setSyncStatus(judgeOutbox.length ? 'Ожидает связи' : 'Отправлено');
+    if (needRefresh) await refreshJudgeState(true);
+    else render();
+    if (judgeOutbox.length) scheduleFlush();
+  } catch (e) {
+    if (e.status === 401) {
+      await judgeAuthLost();
+      return;
+    }
+    for (const item of ready) {
+      item.attempts = Number(item.attempts || 0) + 1;
+      item.lastError = e.message;
+      const delay = Math.min(60000, 1000 * Math.pow(2, Math.min(item.attempts, 6)));
+      item.nextAttemptAt = Date.now() + delay;
+      try { await LazurnyIdb.outboxPut(item); } catch (err) { /* останется в памяти */ }
+    }
+    setSyncStatus('Ожидает связи');
+    render();
+    scheduleFlush();
+  } finally {
+    flushInFlight = false;
+  }
+}
+
+function scheduleFlush() {
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = null;
+  if (!judgeOutbox.length) return;
+  const times = judgeOutbox.map(i => Number(i.nextAttemptAt) || (Date.now() + 1000));
+  const delay = Math.max(1000, Math.min(60000, Math.min(...times) - Date.now()));
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    flushOutbox();
+  }, delay);
+}
+
+/* ==================== СУДЬЯ: РЕНДЕР ==================== */
 function openP() {
-  return state.participants.find(p => p.id === judgeOpenPid) || null;
+  return judgeParticipants().find(p => Number(p.id) === Number(judgeOpenPid)) || null;
 }
 
 function judgeListHtml(list) {
   if (!list.length) return '<p class="empty">В этом блоке пока нет участников</p>';
   return list.map(p => {
-    const saved = !!getScore(p.id, session.judgeId);
+    const rec = getScore(p.id, session.judgeId);
+    const saved = Boolean(rec);
+    const label = saved ? (rec.pending ? 'Сохранено локально' : 'Оценено') : 'Не оценено';
     return `
       <div class="list-row">
         <div class="num-cell">${esc(p.number)}</div>
@@ -726,33 +1328,49 @@ function judgeListHtml(list) {
           <div class="sub">${esc(p.act)}</div>
           <div class="sub">${esc(metaLine(p))}</div>
         </div>
-        <span class="${saved ? 'ok' : 'sub'}">${saved ? 'Оценено' : 'Не оценено'}</span>
+        <span class="${saved ? 'ok' : 'sub'}">${label}</span>
         <button class="btn btn-accent btn-sm" data-pid="${p.id}">${saved ? 'Изменить' : 'Оценить'}</button>
       </div>`;
   }).join('');
 }
 
 function renderJudge() {
-  const genre = session.genre;
-  const list = state.participants
-    .filter(p => p.genre === genre)
-    .sort((a, b) => a.number - b.number);
+  syncJudgeBlockSelection();
+  const blocks = judgeState?.blocks || [];
+  const hasBlocks = blocks.length > 0;
 
-  if (judgeOpenPid && !list.some(p => p.id === judgeOpenPid)) {
+  show('judgeWait', !hasBlocks);
+  show('judgeListCard', hasBlocks && !judgeOpenPid);
+  show('judgeCard', hasBlocks && Boolean(judgeOpenPid));
+
+  if (!hasBlocks) {
+    judgeOpenPid = null;
+    draft = null;
+    $('judgeListTitle').textContent = '';
+    $('judgeListBox').innerHTML = '';
+    return;
+  }
+
+  const list = judgeParticipants();
+  if (judgeOpenPid && !list.some(p => Number(p.id) === Number(judgeOpenPid))) {
     judgeOpenPid = null;
     draft = null;
   }
 
-  show('judgeListCard', !judgeOpenPid);
-  show('judgeCard', !!judgeOpenPid);
-
   if (!judgeOpenPid) {
-    $('judgeListTitle').textContent = `Блок «${genre}»: участники по порядку номеров`;
+    const block = currentJudgeBlock();
+    $('judgeListTitle').textContent = `${block.genre} · ${block.title}`;
     $('judgeListBox').innerHTML = judgeListHtml(list);
     return;
   }
 
   const p = openP();
+  if (!p) {
+    judgeOpenPid = null;
+    draft = null;
+    renderJudge();
+    return;
+  }
   $('jNum').textContent = p.number;
   $('jName').textContent = p.name;
   $('jAct').textContent = p.act;
@@ -761,12 +1379,13 @@ function renderJudge() {
 }
 
 function openParticipant(pid) {
-  const p = state.participants.find(x => x.id === pid);
+  const id = Number(pid);
+  const p = judgeParticipants().find(x => Number(x.id) === id);
   if (!p) return;
-  const saved = getScore(pid, session.judgeId);
-  judgeOpenPid = pid;
+  const saved = getScore(id, session.judgeId);
+  judgeOpenPid = id;
   draft = {
-    pid,
+    pid: id,
     criteria: saved ? { ...saved.criteria } : {},
     comment: saved?.comment || '',
   };
@@ -802,7 +1421,9 @@ function updateJudgeUI() {
 
   $('btnSave').textContent = saved ? 'Сохранить изменения' : 'Сохранить оценку';
   $('jStatus').textContent = saved
-    ? 'Оценка сохранена. Её можно изменить, пока идёт конкурс.'
+    ? (saved.pending
+      ? 'Сохранено на устройстве, ожидает отправки на сервер.'
+      : 'Оценка сохранена. Её можно изменить, пока идёт конкурс.')
     : 'Оценка ещё не сохранена.';
 }
 
@@ -813,24 +1434,25 @@ function onScoreClick(e) {
   updateJudgeUI();
 }
 
-function onSaveScore() {
+async function onSaveScore() {
   const p = openP();
   if (!p || !draft) return;
 
-  const missing = getCriteria(p).filter(c => !draft.criteria[c.key]);
+  const criteriaList = getCriteria(p);
+  const missing = criteriaList.filter(c => !draft.criteria[c.key]);
   if (missing.length) {
     alert(`Поставьте оценку по всем критериям. Не заполнено: ${missing.length}`);
     return;
   }
 
-  state.scores[p.id] = state.scores[p.id] || {};
-  state.scores[p.id][session.judgeId] = {
-    criteria: { ...draft.criteria },
-    comment: $('jComment').value.trim(),
-    savedAt: Date.now(),
-  };
-  saveToLocal();
-  renderJudge();
+  const criteria = {};
+  criteriaList.forEach(c => { criteria[c.key] = Number(draft.criteria[c.key]); });
+  const comment = $('jComment').value.trim();
+  try {
+    await saveScoreLocal(p.id, criteria, comment);
+  } catch (e) {
+    alert(e.message || 'Не удалось сохранить оценку на устройстве');
+  }
 }
 
 function closeJudgeCard() {
@@ -840,24 +1462,21 @@ function closeJudgeCard() {
 }
 
 /* ==================== ИНИЦИАЛИЗАЦИЯ ==================== */
-async function init() {
-  const genreOptions = GENRES.map(g => `<option>${esc(g)}</option>`).join('');
-  $('genreSelect').innerHTML = genreOptions;
-  $('judgeGenre').innerHTML = genreOptions;
-  $('printGenre').innerHTML = genreOptions;
-
-  // Первый запуск: стартовые пароли
-  if (!state.auth.init) {
-    state.auth = {
-      init: true,
-      adminHash: await sha256(DEFAULT_PASSWORD),
-      judgeHash: await sha256(DEFAULT_PASSWORD),
-    };
-    saveToLocal();
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const secure = location.protocol === 'https:'
+    || ['localhost', '127.0.0.1'].includes(location.hostname);
+  if (!secure) {
+    console.warn('[pwa] Service Worker требует HTTPS или localhost');
+    return;
   }
+  navigator.serviceWorker.register('/service-worker.js').catch(err => {
+    console.warn('[pwa] Не удалось зарегистрировать Service Worker', err);
+  });
+}
 
-  // Тема оформления (переключатели в настройках админа и судьи)
-  applyTheme(currentTheme());
+function bindEvents() {
+  // Тема оформления
   document.addEventListener('click', e => {
     const b = e.target.closest('[data-theme-set]');
     if (b) applyTheme(b.dataset.themeSet);
@@ -874,17 +1493,17 @@ async function init() {
     $('cardAdmin').classList.add('hidden');
     $('btnJudgeToggle').classList.add('hidden');
     $('judgePanel').classList.remove('hidden');
-    fillJudgeLoginSelect();
+    $('judgeToken').focus();
   };
-  $('judgeGenre').onchange = fillJudgeLoginSelect;
   $('btnAdminBack').onclick = resetLoginView;
   $('btnJudgeBack').onclick = resetLoginView;
   $('btnAdmin').onclick = onAdminLogin;
   $('adminPin').addEventListener('keydown', e => { if (e.key === 'Enter') onAdminLogin(); });
   $('btnJudge').onclick = onJudgeLogin;
-  $('btnLogout').onclick = () => login(null);
+  $('judgeToken').addEventListener('keydown', e => { if (e.key === 'Enter') onJudgeLogin(); });
+  $('btnLogout').onclick = onLogout;
 
-  // Админ: вкладки
+  // Админ: вкладки и участники
   $('adminTabs').addEventListener('click', e => {
     const b = e.target.closest('[data-tab]');
     if (!b) return;
@@ -895,41 +1514,98 @@ async function init() {
   $('participantsBody').addEventListener('click', onTableClick);
   $('btnExportCsv').onclick = exportCSV;
 
+  // Печать
   $('printGenre').onchange = () => {
-    $('printBlockName').value = BLOCK_TITLE_DEFAULT[$('printGenre').value] || '';
+    $('printBlockName').value = blockTitleForGenre($('printGenre').value);
     fillPrintMode();
   };
-  $('printBlockName').value = BLOCK_TITLE_DEFAULT[GENRES[0]];
   $('btnPrint').onclick = printProtocol;
   $('btnPrintAll').onclick = printAll;
-  fillPrintMode();
 
   // Настройки
   $('formJudge').addEventListener('submit', onAddJudge);
   $('judgesList').addEventListener('click', onJudgesListClick);
   $('assignBox').addEventListener('change', onAssignChange);
-  $('btnSetJudgePass').onclick = setJudgePass;
-  $('btnDelJudgePass').onclick = deleteJudgePass;
+  $('assignBox').addEventListener('click', e => {
+    const b = e.target.closest('button[data-save-block]');
+    if (b) onSaveAssignments(Number(b.dataset.saveBlock));
+  });
   $('btnSetAdminPass').onclick = setAdminPass;
 
+  // Доступ (QR)
+  $('accessBox').addEventListener('click', e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const jid = Number(b.dataset.jid);
+    if (b.dataset.act === 'issue') issueInvitation(jid);
+    if (b.dataset.act === 'revoke') revokeInvitation(jid);
+    if (b.dataset.act === 'print') printInvitation(jid);
+  });
+
   // Судья
+  $('judgeBlockSelect').onchange = () => {
+    judgeBlockId = Number($('judgeBlockSelect').value);
+    judgeOpenPid = null;
+    draft = null;
+    render();
+  };
   $('judgeListBox').addEventListener('click', e => {
     const b = e.target.closest('button[data-pid]');
-    if (b) openParticipant(b.dataset.pid);
+    if (b) openParticipant(Number(b.dataset.pid));
   });
   $('jCriteria').addEventListener('click', onScoreClick);
   $('btnSave').onclick = onSaveScore;
   $('btnBack').onclick = closeJudgeCard;
 
-  // Синхронизация между вкладками одного браузера
-  window.addEventListener('storage', e => {
-    if (e.key === STORAGE_KEY) {
-      state = loadFromLocal();
-      render();
+  // Связь и видимость вкладки
+  window.addEventListener('online', () => {
+    judgeOnline = true;
+    if (session?.role === 'judge') {
+      setSyncStatus('Отправка...');
+      refreshJudgeState(false).then(() => flushOutbox());
     }
+    if (session?.role === 'admin') refreshAdminState(false);
+  });
+  window.addEventListener('offline', () => {
+    judgeOnline = false;
+    if (session?.role === 'judge') setSyncStatus('Ожидает связи');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (session?.role === 'judge') refreshJudgeState(false).then(() => flushOutbox());
+    if (session?.role === 'admin') refreshAdminState(false);
   });
 
+  // Синхронизация темы между вкладками одного браузера
+  window.addEventListener('storage', e => {
+    if (e.key === THEME_KEY) applyTheme(currentTheme());
+  });
+}
+
+async function init() {
+  applyTheme(currentTheme());
+  bindEvents();
+  fillPrintMode();
+
+  // 1. Ссылка из QR имеет приоритет: она сразу авторизует устройство.
+  const fromUrl = await tryJudgeTokenFromUrl();
+  if (!fromUrl) {
+    // 2. Живая cookie администратора переживает перезагрузку.
+    const adminOk = await tryRestoreAdmin();
+    // 3. Иначе — ранее привязанное устройство судьи.
+    if (!adminOk) await tryRestoreJudge();
+  }
+
+  if (!session) {
+    resetLoginView();
+    show('screen-login', true);
+    show('screen-admin', false);
+    show('screen-judge', false);
+    $('btnLogout').classList.add('hidden');
+    $('whoami').textContent = '';
+  }
   render();
+  registerServiceWorker();
 }
 
 document.addEventListener('DOMContentLoaded', init);
